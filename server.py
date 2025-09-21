@@ -19,15 +19,20 @@ from typing import Optional, Dict, List, Set
 # ========================
 load_dotenv()
 
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")
-app = FastAPI(title="DWC Omnichat")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
+
+allowed_origins = ["*"]
+if FRONTEND_ORIGIN:
+    allowed_origins = [FRONTEND_ORIGIN, "https://dwc-omnichat.onrender.com"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else ["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
 )
 
 # Static + Templates (Admin UI)
