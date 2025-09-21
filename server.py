@@ -400,22 +400,41 @@ def root():
 # ========================
 # Webchat REST + WebSocket
 # ========================
+from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+import os
+
 @app.post("/webchat")
 async def webchat_post(msg: PostMessageSchema):
     reply = await route_user_text(msg.user_id, "webchat", msg.text)
-    await ws_manager.push(msg.user_id, "webchat", {"sender": "system", "text": reply, "ts": datetime.datetime.utcnow().isoformat()+"Z"})
+    # push system reply to any open sockets for this user
+    await ws_manager.push(
+        msg.user_id,
+        "webchat",
+        {
+            "sender": "system",
+            "text": reply,
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+        },
+    )
     return {"status": "ok", "message": reply}
 
+# Safe static mount (so Render doesn't crash if directory isn't in the repo)
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# WebSocket endpoint for webchat widget
 @app.websocket("/ws/{user_id}")
 async def ws_endpoint(websocket: WebSocket, user_id: str):
+    # We don't reject any origins here; CORS middleware doesn't apply to WS.
     await ws_manager.connect(user_id, "webchat", websocket)
     try:
+        # We don't require clients to send anything; POST /webchat handles sends.
         while True:
-            # Keep connection alive without expecting client messages
-            await asyncio.sleep(30)
+            # Keep the connection alive; ignore inbound text.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(user_id, "webchat", websocket)
-
 
 # ========================
 # SMS & WhatsApp via Twilio
