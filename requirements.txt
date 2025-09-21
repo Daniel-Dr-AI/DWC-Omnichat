@@ -1,5 +1,5 @@
 ﻿fastapi
-uvicorn
+uvicorn[standard]
 twilio
 python-multipart
 pydantic
@@ -7,3 +7,4 @@ python-dotenv
 httpx
 jinja2
 aiofiles
+
