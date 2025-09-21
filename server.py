@@ -32,14 +32,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-)
-
 # Static + Templates (Admin UI)
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
+
 
 # ========================
 # Logging (rotating file)
