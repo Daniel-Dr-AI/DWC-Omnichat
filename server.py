@@ -31,7 +31,9 @@ app.add_middleware(
 )
 
 # Static + Templates (Admin UI)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if Path("static").exists():
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
 templates = Jinja2Templates(directory="templates")
 
 # ========================
