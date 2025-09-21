@@ -1,0 +1,12 @@
+﻿# venv & caches
+.venv/
+__pycache__/
+*.pyc
+
+# secrets & local db
+.env
+chat.log
+handoff.sqlite
+
+# node or misc
+node_modules/
