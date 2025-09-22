@@ -1,5 +1,4 @@
-\
-from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
+﻿from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, JSONResponse, PlainTextResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -20,10 +19,13 @@ from typing import Optional, Dict, List, Set
 # ========================
 load_dotenv()
 
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
-allowed_origins = ["*"] if not FRONTEND_ORIGIN else [FRONTEND_ORIGIN, "https://dwc-omnichat.onrender.com"]
+app = FastAPI()
 
-app = FastAPI(title="DWC Omnichat")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
+
+allowed_origins = ["*"]
+if FRONTEND_ORIGIN:
+    allowed_origins = [FRONTEND_ORIGIN, "https://dwc-omnichat.onrender.com"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,7 +38,9 @@ app.add_middleware(
 # Static + Templates (Admin UI)
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
 templates = Jinja2Templates(directory="templates")
+
 
 # ========================
 # Logging (rotating file)
@@ -70,6 +74,7 @@ SHIFT_CONFIG_PATH = Path("shift_config.json")
 
 def load_shift_config():
     if SHIFT_CONFIG_PATH.exists():
+        # use utf-8-sig so BOM won't break json.load
         with open(SHIFT_CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     return [
@@ -77,9 +82,10 @@ def load_shift_config():
             "name": "default",
             "start": "00:00",
             "end": "23:59",
-            "numbers": [TWILIO_NUMBER] if TWILIO_NUMBER else []
+            "numbers": [TWILIO_NUMBER]
         }
     ]
+
 
 def parse_hhmm(hhmm: str) -> int:
     h, m = hhmm.split(":")
@@ -89,9 +95,9 @@ SHIFT_ROTA = load_shift_config()
 for s in SHIFT_ROTA:
     s["start_min"] = parse_hhmm(s["start"])
     s["end_min"]   = parse_hhmm(s["end"])
-    s["cycle"]     = itertools.cycle(s["numbers"]) if s.get("numbers") else itertools.cycle([None])
+    s["cycle"]     = itertools.cycle(s["numbers"])
 
-def select_staff_number(now=None) -> Optional[str]:
+def select_staff_number(now=None) -> str:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     mins = now.hour * 60 + now.minute
     for s in SHIFT_ROTA:
@@ -103,7 +109,7 @@ def select_staff_number(now=None) -> Optional[str]:
             chosen = next(s["cycle"])
             logging.info(f"Shift '{s['name']}' -> {chosen}")
             return chosen
-    return SHIFT_ROTA[0]["numbers"][0] if SHIFT_ROTA and SHIFT_ROTA[0].get("numbers") else None
+    return SHIFT_ROTA[0]["numbers"][0]
 
 # ========================
 # SQLite persistence
@@ -122,8 +128,23 @@ def db():
 def db_init():
     with db() as conn:
         c = conn.cursor()
-        c.execute("CREATE TABLE IF NOT EXISTS conversations (user_id TEXT, channel TEXT, assigned_staff TEXT, open INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT, PRIMARY KEY (user_id, channel))")
-        c.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, channel TEXT, sender TEXT, text TEXT, ts TEXT)")
+        c.execute("""CREATE TABLE IF NOT EXISTS conversations (
+            user_id TEXT,
+            channel TEXT,
+            assigned_staff TEXT,
+            open INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            PRIMARY KEY (user_id, channel)
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            channel TEXT,
+            sender TEXT,  -- 'user' | 'staff' | 'system'
+            text TEXT,
+            ts TEXT
+        )""")
         conn.commit()
 
 def ensure_conversation(user_id: str, channel: str):
@@ -132,9 +153,14 @@ def ensure_conversation(user_id: str, channel: str):
         c = conn.cursor()
         c.execute("SELECT user_id FROM conversations WHERE user_id=? AND channel=?", (user_id, channel))
         if not c.fetchone():
-            c.execute("INSERT INTO conversations (user_id, channel, assigned_staff, open, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                      (user_id, channel, None, 0, ts, ts))
+            # New conversations should start as open=1 so they appear in admin dashboard
+            c.execute(
+                "INSERT INTO conversations (user_id, channel, assigned_staff, open, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, channel, None, 1, ts, ts)
+            )
             conn.commit()
+
+
 
 def set_assignment(user_id: str, channel: str, staff_number: Optional[str], open_state: bool):
     ts = datetime.datetime.utcnow().isoformat() + "Z"
@@ -170,7 +196,12 @@ def get_messages(user_id: str, channel: str):
 def latest_user_for_staff(staff_number: str) -> Optional[tuple]:
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT user_id, channel FROM conversations WHERE assigned_staff=? AND open=1 ORDER BY updated_at DESC LIMIT 1", (staff_number,))
+        c.execute("""
+            SELECT user_id, channel FROM conversations
+            WHERE assigned_staff=? AND open=1
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """, (staff_number,))
         row = c.fetchone()
         return (row["user_id"], row["channel"]) if row else None
 
@@ -182,7 +213,7 @@ class WSManager:
         self.connections: Dict[str, Set[WebSocket]] = {}
 
     def key(self, user_id: str, channel: str) -> str:
-        return f\"{user_id}|{channel}\"
+                return f"{user_id}|{channel}"
 
     async def connect(self, user_id: str, channel: str, ws: WebSocket):
         await ws.accept()
@@ -218,13 +249,12 @@ def escalate_if_needed(user_id: str, channel: str):
     convo = get_messages(user_id, channel)
     if not convo["open"]:
         return
-    last_updated_iso = (convo["last_updated"] or "1970-01-01T00:00:00Z").replace("Z", "")
-    last_updated = datetime.datetime.fromisoformat(last_updated_iso)
+    last_updated = datetime.datetime.fromisoformat((convo["last_updated"] or "1970-01-01T00:00:00").replace("Z", ""))
     if (datetime.datetime.utcnow() - last_updated).total_seconds() > ESCALATE_AFTER_SECONDS:
         body = f"Escalation: user {user_id} on {channel} waiting."
         try:
             twilio_client.messages.create(from_=TWILIO_NUMBER, to=BACKUP_NUMBER, body=body)
-        except Exception:
+        except Exception as e:
             logging.exception("Escalation SMS failed")
 
 def auto_close_inactive(user_id: str, channel: str, minutes: int = None):
@@ -242,7 +272,7 @@ _rate_cache: Dict[str, List[float]] = {}
 
 def rate_check(user_id: str, channel: str) -> bool:
     now = datetime.datetime.utcnow().timestamp()
-    key = f\"{user_id}|{channel}\"
+    key = f"{user_id}|{channel}"
     hits = _rate_cache.get(key, [])
     hits = [t for t in hits if now - t < RATE_WINDOW_SECONDS]
     hits.append(now)
@@ -286,17 +316,17 @@ async def send_outbound(to_channel: str, to_id: str, text: str):
 # ========================
 # Handoff core
 # ========================
-def start_handoff(user_id: str, channel: str, initial_text: Optional[str] = None) -> Optional[str]:
+def start_handoff(user_id: str, channel: str, initial_text: Optional[str] = None) -> str:
     ensure_conversation(user_id, channel)
     staff_number = select_staff_number()
     set_assignment(user_id, channel, staff_number, True)
     add_message(user_id, channel, "system", f"Handoff started to {staff_number}.")
     if initial_text:
         add_message(user_id, channel, "user", initial_text)
-    if staff_number and twilio_client:
+    if twilio_client:
         try:
             twilio_client.messages.create(from_=TWILIO_NUMBER, to=staff_number,
-                                          body=trim_message(f"📥 New {channel} request from {user_id}. Msg: {initial_text or ''}"))
+                                          body=trim_message(f"ðŸ“… New {channel} request from {user_id}. Msg: {initial_text or ''}"))
         except Exception:
             logging.exception("Notify staff failed")
     return staff_number
@@ -310,11 +340,11 @@ async def route_user_text(user_id: str, channel: str, text: str) -> str:
 
     convo = get_messages(user_id, channel)
     if text.strip().lower() in ("human", "agent", "staff", "appointment"):
-        start_handoff(user_id, channel, initial_text=text)
+        staff = start_handoff(user_id, channel, initial_text=text)
         escalate_if_needed(user_id, channel)
         return "You're being connected to a staff member."
     if convo["open"] and convo["assigned_staff"]:
-        if twilio_client and convo["assigned_staff"]:
+        if twilio_client:
             try:
                 twilio_client.messages.create(from_=TWILIO_NUMBER, to=convo["assigned_staff"],
                                               body=trim_message(f"{channel}:{user_id}: {text}"))
@@ -373,22 +403,19 @@ def root():
 # ========================
 # Webchat REST + WebSocket
 # ========================
-@app.post("/webchat")
-async def webchat_post(msg: PostMessageSchema):
-    reply = await route_user_text(msg.user_id, "webchat", msg.text)
-    await ws_manager.push(msg.user_id, "webchat", {"sender": "system", "text": reply, "ts": datetime.datetime.utcnow().isoformat()+"Z"})
-    return {"status": "ok", "message": reply}
 
+# WebSocket endpoint for webchat widget
 @app.websocket("/ws/{user_id}")
 async def ws_endpoint(websocket: WebSocket, user_id: str):
+    # We don't reject any origins here; CORS middleware doesn't apply to WS.
     await ws_manager.connect(user_id, "webchat", websocket)
     try:
+        # We don't require clients to send anything; POST /webchat handles sends.
         while True:
-            # Keep the connection alive
-            await asyncio.sleep(30)
+            # Keep the connection alive; ignore inbound text.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(user_id, "webchat", websocket)
-        logging.info(f"WebSocket disconnected for user {user_id}")
 
 # ========================
 # SMS & WhatsApp via Twilio
@@ -484,6 +511,10 @@ def handoff_messages(channel: str, user_id: str):
 # ========================
 # Admin Dashboard
 # ========================
+# ========================
+# Admin Dashboard
+# ========================
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
@@ -492,12 +523,23 @@ def admin_page(request: Request):
 def admin_convos():
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT * FROM conversations WHERE open=1 ORDER BY updated_at DESC")
+        # Show all conversations ordered by last update
+        c.execute("SELECT * FROM conversations ORDER BY updated_at DESC")
+        convos = [dict(r) for r in c.fetchall()]
+    return {"conversations": convos}
+
+@app.get("/admin/api/history")
+def admin_history():
+    with db() as conn:
+        c = conn.cursor()
+        # Only closed conversations
+        c.execute("SELECT * FROM conversations WHERE open=0 ORDER BY updated_at DESC")
         convos = [dict(r) for r in c.fetchall()]
     return {"conversations": convos}
 
 @app.get("/admin/api/messages/{channel}/{user_id}")
 def admin_messages(channel: str, user_id: str):
+    # Pass args in correct order: user_id first, then channel
     return get_messages(user_id, channel)
 
 @app.post("/admin/api/send")
@@ -505,15 +547,6 @@ async def admin_send(payload: AdminSendSchema):
     add_message(payload.user_id, payload.channel, "staff", payload.text)
     await send_outbound(payload.channel, payload.user_id, payload.text)
     return {"status": "sent"}
-
-@app.get("/admin/api/history")
-def admin_history():
-    # Quick endpoint to fetch the last 50 messages across channels (for debugging)
-    with db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT user_id, channel, sender, text, ts FROM messages ORDER BY id DESC LIMIT 50")
-        rows = [dict(r) for r in c.fetchall()]
-    return {"messages": rows}
 
 # ========================
 # Simulate (local testing)
