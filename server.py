@@ -247,6 +247,42 @@ def admin_dashboard(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
 
 # ========================
+# Admin API (for dashboard)
+# ========================
+@app.get("/admin/api/convos")
+def admin_convos():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE open=1 ORDER BY updated_at DESC")
+        rows = c.fetchall()
+    return {"conversations": [dict(r) for r in rows]}
+
+@app.get("/admin/api/history")
+def admin_history():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE open=0 ORDER BY updated_at DESC LIMIT 50")
+        rows = c.fetchall()
+    return {"conversations": [dict(r) for r in rows]}
+
+@app.get("/admin/api/messages/{channel}/{user_id}")
+def admin_messages(channel: str, user_id: str):
+    return get_messages(user_id, channel)
+
+@app.post("/admin/api/send")
+async def admin_send(msg: AdminSendSchema):
+    add_message(msg.user_id, msg.channel, "staff", msg.text)
+    await ws_manager.push(msg.user_id, msg.channel,
+        {"sender": "staff", "text": msg.text, "ts": datetime.datetime.utcnow().isoformat()+"Z"}
+    )
+    return {"status": "ok"}
+
+@app.post("/handoff/close")
+def handoff_close(data: StartHandoffSchema):
+    set_assignment(data.user_id, data.channel, None, False)
+    return {"status": "closed"}
+
+# ========================
 # Webchat Endpoints
 # ========================
 @app.get("/webchat")
