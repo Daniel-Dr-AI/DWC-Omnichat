@@ -245,6 +245,7 @@ def webchat_check():
 
 @app.post("/webchat")
 async def webchat_post(msg: PostMessageSchema):
+    ensure_conversation(msg.user_id, "webchat")   # ✅ FIX
     add_message(msg.user_id, "webchat", "user", msg.text)
     reply = "Message received"
     await ws_manager.push(msg.user_id, "webchat",
