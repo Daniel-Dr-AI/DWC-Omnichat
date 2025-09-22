@@ -19,6 +19,8 @@ from typing import Optional, Dict, List, Set
 # ========================
 load_dotenv()
 
+app = FastAPI()
+
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
 
 allowed_origins = ["*"]
@@ -32,6 +34,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Static + Templates (Admin UI)
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -323,7 +326,7 @@ def start_handoff(user_id: str, channel: str, initial_text: Optional[str] = None
     if twilio_client:
         try:
             twilio_client.messages.create(from_=TWILIO_NUMBER, to=staff_number,
-                                          body=trim_message(f"ðŸ“… New {channel} request from {user_id}. Msg: {initial_text or ''}"))
+                                          body=trim_message(f"📩 New {channel}. Msg: {initial_text or ''}"))
         except Exception:
             logging.exception("Notify staff failed")
     return staff_number
@@ -398,43 +401,18 @@ def root():
     return {"message": "DWC Omnichat live (SMS/WhatsApp/Messenger/Webchat + Admin)."}
 
 # ========================
-# Webchat REST + WebSocket
+# Webchat WebSocket
 # ========================
-from fastapi import WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-import os
-
-@app.post("/webchat")
-async def webchat_post(msg: PostMessageSchema):
-    reply = await route_user_text(msg.user_id, "webchat", msg.text)
-    # push system reply to any open sockets for this user
-    await ws_manager.push(
-        msg.user_id,
-        "webchat",
-        {
-            "sender": "system",
-            "text": reply,
-            "ts": datetime.datetime.utcnow().isoformat() + "Z",
-        },
-    )
-    return {"status": "ok", "message": reply}
-
-# Safe static mount (so Render doesn't crash if directory isn't in the repo)
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# WebSocket endpoint for webchat widget
 @app.websocket("/ws/{user_id}")
 async def ws_endpoint(websocket: WebSocket, user_id: str):
-    # We don't reject any origins here; CORS middleware doesn't apply to WS.
     await ws_manager.connect(user_id, "webchat", websocket)
     try:
-        # We don't require clients to send anything; POST /webchat handles sends.
         while True:
-            # Keep the connection alive; ignore inbound text.
-            await websocket.receive_text()
+            # Keep the connection alive (no data expected from client directly)
+            await asyncio.sleep(30)
     except WebSocketDisconnect:
         ws_manager.disconnect(user_id, "webchat", websocket)
+        logging.info(f"WebSocket disconnected for user {user_id}")
 
 # ========================
 # SMS & WhatsApp via Twilio
@@ -530,9 +508,6 @@ def handoff_messages(channel: str, user_id: str):
 # ========================
 # Admin Dashboard
 # ========================
-# ========================
-# Admin Dashboard
-# ========================
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
@@ -543,7 +518,7 @@ def admin_convos():
     with db() as conn:
         c = conn.cursor()
         # Show all conversations ordered by last update
-        c.execute("SELECT * FROM conversations ORDER BY updated_at DESC")
+        c.execute("SELECT * FROM conversations WHERE open=1 ORDER BY updated_at DESC")
         convos = [dict(r) for r in c.fetchall()]
     return {"conversations": convos}
 
