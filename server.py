@@ -206,6 +206,19 @@ def latest_user_for_staff(staff_number: str) -> Optional[tuple]:
         return (row["user_id"], row["channel"]) if row else None
 
 # ========================
+# Webchat REST endpoint (for widget)
+# ========================
+@app.post("/webchat")
+async def webchat_post(msg: PostMessageSchema):
+    reply = await route_user_text(msg.user_id, "webchat", msg.text)
+    await ws_manager.push(
+        msg.user_id,
+        "webchat",
+        {"sender": "system", "text": reply, "ts": datetime.datetime.utcnow().isoformat() + "Z"}
+    )
+    return {"status": "ok", "message": reply}
+
+# ========================
 # WebSocket manager (webchat)
 # ========================
 class WSManager:
