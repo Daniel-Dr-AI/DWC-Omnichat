@@ -238,6 +238,15 @@ def health():
     return {"status": "running", "db": str(DB_PATH), "shifts": [s["name"] for s in SHIFT_ROTA]}
 
 # ========================
+# Admin Dashboard
+# ========================
+from fastapi.responses import HTMLResponse
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(request: Request):
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+# ========================
 # Webchat Endpoints
 # ========================
 @app.get("/webchat")
