@@ -206,6 +206,24 @@ def latest_user_for_staff(staff_number: str) -> Optional[tuple]:
         return (row["user_id"], row["channel"]) if row else None
 
 # ========================
+# Schemas
+# ========================
+class StartHandoffSchema(BaseModel):
+    user_id: str
+    channel: str = "webchat"
+    initial_message: Optional[str] = None
+
+class PostMessageSchema(BaseModel):
+    user_id: str
+    channel: str = "webchat"
+    text: str
+
+class AdminSendSchema(BaseModel):
+    user_id: str
+    channel: str
+    text: str
+
+# ========================
 # Webchat REST endpoint (for widget)
 # ========================
 @app.post("/webchat")
@@ -366,24 +384,6 @@ async def route_user_text(user_id: str, channel: str, text: str) -> str:
         escalate_if_needed(user_id, channel)
         return "Message sent to staff."
     return "Reply 'human' to connect with a staff member."
-
-# ========================
-# Schemas
-# ========================
-class StartHandoffSchema(BaseModel):
-    user_id: str
-    channel: str = "webchat"
-    initial_message: Optional[str] = None
-
-class PostMessageSchema(BaseModel):
-    user_id: str
-    channel: str = "webchat"
-    text: str
-
-class AdminSendSchema(BaseModel):
-    user_id: str
-    channel: str
-    text: str
 
 # ========================
 # Startup & Health
