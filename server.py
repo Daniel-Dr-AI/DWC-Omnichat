@@ -232,14 +232,20 @@ async def admin_send(msg: AdminSendSchema):
                           {"sender": "staff", "text": msg.text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
 
-    # NEW: forward to Twilio if SMS/WhatsApp
+    # Forward to Twilio if SMS/WhatsApp, with debug logging
     if twilio_client and msg.channel in ("sms", "whatsapp"):
         try:
-            to_number = msg.user_id
-            from_number = TWILIO_NUMBER
             if msg.channel == "whatsapp":
-                to_number = f"whatsapp:{to_number}"
-                from_number = f"whatsapp:{from_number}"
+                if not msg.user_id.startswith("whatsapp:"):
+                    to_number = f"whatsapp:{msg.user_id}"
+                else:
+                    to_number = msg.user_id
+                from_number = f"whatsapp:{TWILIO_NUMBER}"
+            else:
+                to_number = msg.user_id
+                from_number = TWILIO_NUMBER
+
+            logging.info(f"Sending via Twilio: from={from_number}, to={to_number}, body={msg.text}")
             twilio_client.messages.create(
                 body=msg.text,
                 from_=from_number,
