@@ -231,6 +231,23 @@ async def admin_send(msg: AdminSendSchema):
     await ws_manager.push(msg.user_id, msg.channel,
                           {"sender": "staff", "text": msg.text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+
+    # NEW: forward to Twilio if SMS/WhatsApp
+    if twilio_client and msg.channel in ("sms", "whatsapp"):
+        try:
+            to_number = msg.user_id
+            from_number = TWILIO_NUMBER
+            if msg.channel == "whatsapp":
+                to_number = f"whatsapp:{to_number}"
+                from_number = f"whatsapp:{from_number}"
+            twilio_client.messages.create(
+                body=msg.text,
+                from_=from_number,
+                to=to_number
+            )
+        except Exception as e:
+            logging.error(f"Twilio send failed: {e}")
+
     return {"status": "ok"}
 
 @app.post("/handoff/close")
