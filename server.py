@@ -261,7 +261,7 @@ async def sms_webhook(
     Body: str = Form(...)
 ):
     user_id = From
-    channel = "sms"
+    channel = "whatsapp" if From.startswith("whatsapp:") else "sms"
     text = Body.strip()
 
     ensure_conversation(user_id, channel)
