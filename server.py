@@ -38,8 +38,12 @@ templates = Jinja2Templates(directory="templates")
 
 # Logging
 log_handler = RotatingFileHandler("chat.log", maxBytes=1_000_000, backupCount=5)
-logging.basicConfig(handlers=[log_handler], level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s")
+console_handler = logging.StreamHandler()  # ensure logs also go to stdout for Render
+logging.basicConfig(
+    handlers=[log_handler, console_handler],
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 # ========================
 # Twilio / Config
