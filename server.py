@@ -194,6 +194,10 @@ ws_manager = WSManager()
 def on_startup():
     db_init()
     logging.info("DB initialized.")
+    logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
+                 f"Token={'set' if AUTH_TOKEN else 'missing'}, "
+                 f"Number={TWILIO_NUMBER}, "
+                 f"Client={'ready' if twilio_client else 'NONE'}")
 
 @app.get("/health")
 def health():
