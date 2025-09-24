@@ -63,7 +63,7 @@ if ACCOUNT_SID and AUTH_TOKEN:
 DB_PATH = "handoff.sqlite"
 SHIFT_ROTA = [{"name": "Default"}]  # stub for config
 BACKUP_NUMBER = os.getenv("BACKUP_NUMBER")
-ESCLATE_AFTER_SECONDS = 120
+ESCALATE_AFTER_SECONDS = 120
 
 # ========================
 # DB Helpers
@@ -202,10 +202,6 @@ def on_startup():
                  f"Token={'set' if AUTH_TOKEN else 'missing'}, "
                  f"Number={TWILIO_NUMBER}, "
                  f"Client={'ready' if twilio_client else 'NONE'}")
-    logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
-                 f"Token={'set' if AUTH_TOKEN else 'missing'}, "
-                 f"Number={TWILIO_NUMBER}, "
-                 f"Client={'ready' if twilio_client else 'NONE'}")
 
 @app.get("/health")
 def health():
@@ -240,7 +236,7 @@ def admin_messages(channel: str, user_id: str):
 @app.post("/admin/api/send")
 async def admin_send(msg: AdminSendSchema):
     add_message(msg.user_id, msg.channel, "staff", msg.text)
-    await ws_manager.push(msg.user_id, msg.channel,
+    await push_with_admin(msg.user_id, msg.channel,
                           {"sender": "staff", "text": msg.text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
 
@@ -285,7 +281,7 @@ async def webchat_post(msg: PostMessageSchema):
     ensure_conversation(msg.user_id, "webchat")   # ✅ FIX
     add_message(msg.user_id, "webchat", "user", msg.text)
     reply = "Message received"
-    await ws_manager.push(msg.user_id, "webchat",
+    await push_with_admin(msg.user_id, "webchat",
                           {"sender": "system", "text": reply,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
     return {"status": "ok", "message": reply}
@@ -304,7 +300,7 @@ async def sms_webhook(
     ensure_conversation(user_id, channel)
     add_message(user_id, channel, "user", text)
 
-    await ws_manager.push(user_id, channel,
+    await push_with_admin(user_id, channel,
                           {"sender": "user", "text": text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
 
@@ -312,6 +308,7 @@ async def sms_webhook(
     resp.message("Thanks, we got your message!")
     return PlainTextResponse(str(resp), media_type="application/xml")
 
+# WebSocket for webchat visitors
 @app.websocket("/ws/{user_id}")
 async def ws_endpoint(websocket: WebSocket, user_id: str):
     await ws_manager.connect(user_id, "webchat", websocket)
@@ -320,3 +317,29 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
             await asyncio.sleep(30)
     except WebSocketDisconnect:
         ws_manager.disconnect(user_id, "webchat", websocket)
+
+# WebSocket for admin dashboard (broadcast)
+admin_connections: Set[WebSocket] = set()
+
+@app.websocket("/ws/admin-dashboard")
+async def ws_admin(websocket: WebSocket):
+    await websocket.accept()
+    admin_connections.add(websocket)
+    try:
+        while True:
+            await asyncio.sleep(30)
+    except WebSocketDisconnect:
+        if websocket in admin_connections:
+            admin_connections.remove(websocket)
+
+# Helper: push to both user channel + admin dashboard
+async def push_with_admin(user_id: str, channel: str, payload: dict):
+    # push to user
+    await ws_manager.push(user_id, channel, payload)
+    # push to admin dashboards
+    for ws in list(admin_connections):
+        try:
+            # include user_id + channel for context
+            await ws.send_json({"user_id": user_id, "channel": channel, **payload})
+        except Exception:
+            admin_connections.remove(ws)
