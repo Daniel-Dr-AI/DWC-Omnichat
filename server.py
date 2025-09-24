@@ -198,6 +198,10 @@ def on_startup():
                  f"Token={'set' if AUTH_TOKEN else 'missing'}, "
                  f"Number={TWILIO_NUMBER}, "
                  f"Client={'ready' if twilio_client else 'NONE'}")
+    logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
+                 f"Token={'set' if AUTH_TOKEN else 'missing'}, "
+                 f"Number={TWILIO_NUMBER}, "
+                 f"Client={'ready' if twilio_client else 'NONE'}")
 
 @app.get("/health")
 def health():
@@ -258,7 +262,7 @@ async def admin_send(msg: AdminSendSchema):
                     to=to_number
                 )
             except Exception as e:
-                logging.error(f"Twilio send failed: {e}")
+                logging.exception(f"Twilio send failed with exception: {repr(e)}")
 
     return {"status": "ok"}
 
