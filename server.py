@@ -232,27 +232,29 @@ async def admin_send(msg: AdminSendSchema):
                           {"sender": "staff", "text": msg.text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})
 
-    # Forward to Twilio if SMS/WhatsApp, with debug logging
-    if twilio_client and msg.channel in ("sms", "whatsapp"):
-        try:
-            if msg.channel == "whatsapp":
-                if not msg.user_id.startswith("whatsapp:"):
-                    to_number = f"whatsapp:{msg.user_id}"
+    # Forward to Twilio if SMS/WhatsApp, with normalization + debug logging
+    if twilio_client:
+        channel = (msg.channel or "").strip().lower()
+        if channel in ("sms", "whatsapp"):
+            try:
+                if channel == "whatsapp":
+                    if not msg.user_id.startswith("whatsapp:"):
+                        to_number = f"whatsapp:{msg.user_id}"
+                    else:
+                        to_number = msg.user_id
+                    from_number = f"whatsapp:{TWILIO_NUMBER}"
                 else:
                     to_number = msg.user_id
-                from_number = f"whatsapp:{TWILIO_NUMBER}"
-            else:
-                to_number = msg.user_id
-                from_number = TWILIO_NUMBER
+                    from_number = TWILIO_NUMBER
 
-            logging.info(f"Sending via Twilio: from={from_number}, to={to_number}, body={msg.text}")
-            twilio_client.messages.create(
-                body=msg.text,
-                from_=from_number,
-                to=to_number
-            )
-        except Exception as e:
-            logging.error(f"Twilio send failed: {e}")
+                logging.info(f"Sending via Twilio: from={from_number}, to={to_number}, body={msg.text}")
+                twilio_client.messages.create(
+                    body=msg.text,
+                    from_=from_number,
+                    to=to_number
+                )
+            except Exception as e:
+                logging.error(f"Twilio send failed: {e}")
 
     return {"status": "ok"}
 
