@@ -157,12 +157,45 @@ async function closeConvo(){
   loadHistory();
 }
 
-function refreshData(){
-  loadConvos();
-  loadHistory();
+// WebSocket for real-time updates
+let wsAdmin;
+function connectAdminWS(){
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
+  wsAdmin.onopen = () => console.log("Admin WS connected");
+  wsAdmin.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      // For now, just refresh UI when any event arrives
+      loadConvos();
+      loadHistory();
+      // Optionally, append live messages if current convo is open
+      if(current && data.sender && data.text && data.ts && data.user_id===current.user_id){
+        const msgs = document.getElementById('msgs');
+        const row = document.createElement('div');
+        row.className = 'msg ' + data.sender;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const ts = new Date(data.ts).toLocaleString();
+        meta.textContent = `${data.sender} — ${ts}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = data.text;
+        row.appendChild(meta);
+        row.appendChild(bubble);
+        msgs.appendChild(row);
+        msgs.scrollTop = msgs.scrollHeight;
+      }
+    } catch(e){
+      console.error("Bad WS message", e);
+    }
+  };
+  wsAdmin.onclose = () => {
+    console.log("Admin WS closed, retrying...");
+    setTimeout(connectAdminWS, 3000);
+  };
 }
-refreshData();
-setInterval(refreshData,5000);
+connectAdminWS();
 </script>
 </body>
 </html>
