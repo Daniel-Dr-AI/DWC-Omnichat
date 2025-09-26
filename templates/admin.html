@@ -1,1 +1,198 @@
-<contents from message 65 admin.html>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>DWC Admin Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin:20px; }
+    h1 { margin-bottom: 8px; }
+    .tab-buttons { margin-bottom:15px; }
+    .tab-buttons button { margin-right:10px; padding:6px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; }
+    .tab-buttons button.active { background:#e0f2fe; border-color:#38bdf8; }
+    #convos, #history { margin-bottom:20px; }
+    .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
+    .convo:hover { background:#f6fafd; }
+    .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
+    .msg { margin:6px 0; }
+    .msg .meta { color:#6b7280; font-size:12px; margin-bottom:2px; }
+    .bubble { display:inline-block; padding:8px 10px; border-radius:10px; }
+    .user .bubble { background:#e0f2fe; border:1px solid #bae6fd; color:#0369a1; }
+    .staff .bubble { background:#dcfce7; border:1px solid #bbf7d0; color:#166534; }
+    .system .bubble { background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; font-style:italic; }
+    #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; }
+    #actions { margin-top:10px; }
+  </style>
+</head>
+<body>
+<h1>DWC Admin Dashboard</h1>
+<div class="tab-buttons">
+  <button id="openTab" class="active" onclick="showTab('open')">Open</button>
+  <button id="historyTab" onclick="showTab('history')">History</button>
+</div>
+
+<div id="convos"></div>
+<div id="history" style="display:none;"></div>
+
+<div id="chatbox" style="display:none;">
+  <h2>Conversation: <span id="cid"></span> <small id="cchan"></small></h2>
+  <div class="messages" id="msgs"></div>
+  <input id="reply" style="width:70%;padding:8px;" placeholder="Type reply to user...">
+  <button onclick="send()" style="padding:8px 12px;">Send</button>
+  <div id="actions">
+    <button onclick="closeConvo()" style="margin-top:10px; padding:6px 10px; background:#fca5a5; border:1px solid #f87171; border-radius:6px; cursor:pointer;">
+      Close Conversation
+    </button>
+  </div>
+</div>
+
+<script>
+let current = null;
+let activeTab = 'open';
+
+function showTab(tab){
+  activeTab = tab;
+  document.getElementById('openTab').classList.remove('active');
+  document.getElementById('historyTab').classList.remove('active');
+  if(tab==='open'){
+    document.getElementById('openTab').classList.add('active');
+    document.getElementById('convos').style.display='block';
+    document.getElementById('history').style.display='none';
+  } else {
+    document.getElementById('historyTab').classList.add('active');
+    document.getElementById('convos').style.display='none';
+    document.getElementById('history').style.display='block';
+  }
+}
+
+async function loadConvos(){
+  const res = await fetch('/admin/api/convos');
+  const data = await res.json();
+  const div = document.getElementById('convos');
+  div.innerHTML = '<h2>Open Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No open conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo';
+    el.textContent = `${c.user_id} (${c.channel}) — staff: ${c.assigned_staff || 'unassigned'}`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function loadHistory(){
+  const res = await fetch('/admin/api/history');
+  const data = await res.json();
+  const div = document.getElementById('history');
+  div.innerHTML = '<h2>Closed Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No closed conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo';
+    el.textContent = `${c.user_id} (${c.channel}) — closed at ${c.updated_at}`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function openConvo(channel,user_id){
+  current = {channel,user_id};
+  document.getElementById('cid').textContent = user_id;
+  document.getElementById('cchan').textContent = '('+channel+')';
+  document.getElementById('chatbox').style.display = 'block';
+
+  const res = await fetch(`/admin/api/messages/${channel}/${user_id}`);
+  if (!res.ok) {
+    console.error("Failed to fetch messages", res.status);
+    return;
+  }
+  const data = await res.json();
+
+  const msgs = document.getElementById('msgs');
+  msgs.innerHTML = '';
+  (data.messages || []).forEach(m=>{
+    const row = document.createElement('div');
+    row.className = 'msg ' + m.sender;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const ts = m.ts ? new Date(m.ts).toLocaleString() : "";
+    meta.textContent = `${m.sender}${ts ? " — " + ts : ""}`;
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = m.text;
+    row.appendChild(meta); 
+    row.appendChild(bubble);
+    msgs.appendChild(row);
+  });
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+async function send(){
+  if(!current) return;
+  const text = document.getElementById('reply').value.trim();
+  if(!text) return;
+  document.getElementById('reply').value='';
+  await fetch('/admin/api/send',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...current,text})
+  });
+  openConvo(current.channel,current.user_id);
+}
+
+async function closeConvo(){
+  if(!current) return;
+  await fetch('/handoff/close',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...current})
+  });
+  document.getElementById('chatbox').style.display = 'none';
+  loadConvos();
+  loadHistory();
+}
+
+// WebSocket for real-time updates
+let wsAdmin;
+function connectAdminWS(){
+  wsAdmin = new WebSocket(`ws://${location.host}/ws/admin-dashboard`);
+  wsAdmin.onopen = () => console.log("Admin WS connected");
+  wsAdmin.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      loadConvos();
+      loadHistory();
+      if(current && data.sender && data.text && data.ts && data.user_id===current.user_id){
+        const msgs = document.getElementById('msgs');
+        const row = document.createElement('div');
+        row.className = 'msg ' + data.sender;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const ts = new Date(data.ts).toLocaleString();
+        meta.textContent = `${data.sender} — ${ts}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = data.text;
+        row.appendChild(meta);
+        row.appendChild(bubble);
+        msgs.appendChild(row);
+        msgs.scrollTop = msgs.scrollHeight;
+      }
+    } catch(e){
+      console.error("Bad WS message", e);
+    }
+  };
+  wsAdmin.onclose = () => {
+    console.log("Admin WS closed, retrying...");
+    setTimeout(connectAdminWS, 3000);
+  };
+}
+connectAdminWS();
+</script>
+</body>
+</html>
