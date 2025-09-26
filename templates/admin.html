@@ -162,15 +162,20 @@ let wsAdmin;
 function connectAdminWS(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
-  wsAdmin.onopen = () => console.log("Admin WS connected");
+  wsAdmin.onopen = () => {
+    console.log("Admin WS connected");
+    // Initial load so the dashboard isn’t blank on first paint
+    loadConvos();
+    loadHistory();
+  };
   wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      // For now, just refresh UI when any event arrives
+      // Refresh lists on any server event
       loadConvos();
       loadHistory();
-      // Optionally, append live messages if current convo is open
-      if(current && data.sender && data.text && data.ts && data.user_id===current.user_id){
+      // Append live message if current convo is open
+      if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
         const msgs = document.getElementById('msgs');
         const row = document.createElement('div');
         row.className = 'msg ' + data.sender;
@@ -190,12 +195,18 @@ function connectAdminWS(){
       console.error("Bad WS message", e);
     }
   };
+  wsAdmin.onerror = (e) => {
+    console.error("Admin WS error", e);
+  };
   wsAdmin.onclose = () => {
     console.log("Admin WS closed, retrying...");
     setTimeout(connectAdminWS, 3000);
   };
 }
 connectAdminWS();
+// Fallback: if WS is slow to connect, still show current state
+loadConvos();
+loadHistory();
 </script>
 </body>
 </html>
