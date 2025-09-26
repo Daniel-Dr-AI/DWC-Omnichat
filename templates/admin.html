@@ -1,4 +1,5 @@
-﻿<!DOCTYPE html>
+
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -9,8 +10,8 @@
     .tab-buttons { margin-bottom:15px; }
     .tab-buttons button { margin-right:10px; padding:6px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; }
     .tab-buttons button.active { background:#e0f2fe; border-color:#38bdf8; }
-    #convos, #history { margin-bottom:20px; }
-    .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
+    #convos, #history, #callbacks { margin-bottom:20px; }
+    .convo { border:1px solid #ccc; padding:10px; margin:6px 0; border-radius:8px; }
     .convo:hover { background:#f6fafd; }
     .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
     .msg { margin:6px 0; }
@@ -21,6 +22,7 @@
     .system .bubble { background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; font-style:italic; }
     #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; }
     #actions { margin-top:10px; }
+    .resolve-btn { margin-left:10px; padding:2px 6px; font-size:12px; background:#bbf7d0; border:1px solid #22c55e; border-radius:4px; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -28,10 +30,12 @@
 <div class="tab-buttons">
   <button id="openTab" class="active" onclick="showTab('open')">Open</button>
   <button id="historyTab" onclick="showTab('history')">History</button>
+  <button id="callbacksTab" onclick="showTab('callbacks')">Callbacks</button>
 </div>
 
 <div id="convos"></div>
 <div id="history" style="display:none;"></div>
+<div id="callbacks" style="display:none;"></div>
 
 <div id="chatbox" style="display:none;">
   <h2>Conversation: <span id="cid"></span> <small id="cchan"></small></h2>
@@ -53,14 +57,19 @@ function showTab(tab){
   activeTab = tab;
   document.getElementById('openTab').classList.remove('active');
   document.getElementById('historyTab').classList.remove('active');
+  document.getElementById('callbacksTab').classList.remove('active');
+  document.getElementById('convos').style.display='none';
+  document.getElementById('history').style.display='none';
+  document.getElementById('callbacks').style.display='none';
   if(tab==='open'){
     document.getElementById('openTab').classList.add('active');
     document.getElementById('convos').style.display='block';
-    document.getElementById('history').style.display='none';
-  } else {
+  } else if(tab==='history'){
     document.getElementById('historyTab').classList.add('active');
-    document.getElementById('convos').style.display='none';
     document.getElementById('history').style.display='block';
+  } else {
+    document.getElementById('callbacksTab').classList.add('active');
+    document.getElementById('callbacks').style.display='block';
   }
 }
 
@@ -96,6 +105,36 @@ async function loadHistory(){
     el.className = 'convo';
     el.textContent = `${c.user_id} (${c.channel}) — closed at ${c.updated_at}`;
     el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function loadCallbacks(){
+  const res = await fetch('/admin/api/callbacks');
+  const data = await res.json();
+  const div = document.getElementById('callbacks');
+  div.innerHTML = '<h2>Pending Callback Requests</h2>';
+  if(!data.callbacks.length){
+    div.innerHTML += '<p>No pending callbacks.</p>';
+    return;
+  }
+  data.callbacks.forEach(cb=>{
+    const el = document.createElement('div');
+    el.className = 'convo';
+    const ts = cb.ts ? new Date(cb.ts).toLocaleString() : "";
+    el.textContent = `${cb.user_id} (${cb.channel}) — ${cb.message} [${ts}]`;
+    const btn = document.createElement('button');
+    btn.textContent = "Mark Resolved";
+    btn.className = "resolve-btn";
+    btn.onclick = async ()=>{
+      await fetch('/admin/api/callbacks/resolve', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:cb.id})
+      });
+      loadCallbacks();
+    };
+    el.appendChild(btn);
     div.appendChild(el);
   });
 }
@@ -155,21 +194,20 @@ async function closeConvo(){
   document.getElementById('chatbox').style.display = 'none';
   loadConvos();
   loadHistory();
+  loadCallbacks();
 }
 
 // WebSocket for real-time updates
 let wsAdmin;
 function connectAdminWS(){
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
+  wsAdmin = new WebSocket(`ws://${location.host}/ws/admin-dashboard`);
   wsAdmin.onopen = () => console.log("Admin WS connected");
   wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      // For now, just refresh UI when any event arrives
       loadConvos();
       loadHistory();
-      // Optionally, append live messages if current convo is open
+      loadCallbacks();
       if(current && data.sender && data.text && data.ts && data.user_id===current.user_id){
         const msgs = document.getElementById('msgs');
         const row = document.createElement('div');
@@ -196,6 +234,9 @@ function connectAdminWS(){
   };
 }
 connectAdminWS();
+loadConvos();
+loadHistory();
+loadCallbacks();
 </script>
 </body>
 </html>
