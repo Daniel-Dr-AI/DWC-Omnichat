@@ -80,22 +80,12 @@ def db_init():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, channel TEXT,
             assigned_staff TEXT,
-            open INTEGER, updated_at TEXT,
-            escalated_count INTEGER DEFAULT 0,
-            escalated_at TEXT
+            open INTEGER, updated_at TEXT
         )""")
         c.execute("""CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, channel TEXT,
             sender TEXT, text TEXT, ts TEXT
-        )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS staff (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            phone TEXT UNIQUE,
-            role TEXT,
-            available INTEGER,
-            last_seen TEXT
         )""")
         conn.commit()
 
@@ -202,5 +192,154 @@ class WSManager:
 ws_manager = WSManager()
 
 # ========================
-# Routes (truncated here, but continues as in your uploaded original)
+# Routes
 # ========================
+@app.on_event("startup")
+def on_startup():
+    db_init()
+    logging.info("DB initialized.")
+    logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
+                 f"Token={'set' if AUTH_TOKEN else 'missing'}, "
+                 f"Number={TWILIO_NUMBER}, "
+                 f"Client={'ready' if twilio_client else 'NONE'}")
+
+@app.get("/health")
+def health():
+    return {"status": "running", "db": str(DB_PATH), "shifts": [s["name"] for s in SHIFT_ROTA]}
+
+# Admin dashboard
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(request: Request):
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+# Admin API
+@app.get("/admin/api/convos")
+def admin_convos():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE open=1 ORDER BY updated_at DESC")
+        rows = c.fetchall()
+    return {"conversations": [dict(r) for r in rows]}
+
+@app.get("/admin/api/history")
+def admin_history():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE open=0 ORDER BY updated_at DESC LIMIT 50")
+        rows = c.fetchall()
+    return {"conversations": [dict(r) for r in rows]}
+
+@app.get("/admin/api/messages/{channel}/{user_id}")
+def admin_messages(channel: str, user_id: str):
+    return get_messages(user_id, channel)
+
+@app.post("/admin/api/send")
+async def admin_send(msg: AdminSendSchema):
+    add_message(msg.user_id, msg.channel, "staff", msg.text)
+    await push_with_admin(msg.user_id, msg.channel,
+                          {"sender": "staff", "text": msg.text,
+                           "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+
+    # Forward to Twilio if SMS/WhatsApp, with normalization + debug logging
+    if twilio_client:
+        channel = (msg.channel or "").strip().lower()
+        if channel in ("sms", "whatsapp"):
+            try:
+                if channel == "whatsapp":
+                    if not msg.user_id.startswith("whatsapp:"):
+                        to_number = f"whatsapp:{msg.user_id}"
+                    else:
+                        to_number = msg.user_id
+                    from_number = f"whatsapp:{TWILIO_NUMBER}"
+                else:
+                    to_number = msg.user_id
+                    from_number = TWILIO_NUMBER
+
+                logging.info(f"Sending via Twilio: from={from_number}, to={to_number}, body={msg.text}")
+                twilio_client.messages.create(
+                    body=msg.text,
+                    from_=from_number,
+                    to=to_number
+                )
+            except Exception as e:
+                logging.exception(f"Twilio send failed with exception: {repr(e)}")
+
+    return {"status": "ok"}
+
+@app.post("/handoff/close")
+def handoff_close(data: StartHandoffSchema):
+    set_assignment(data.user_id, data.channel, None, False)
+    return {"status": "closed"}
+
+# Webchat
+@app.get("/webchat")
+def webchat_check():
+    return {"status": "ok"}
+
+@app.post("/webchat")
+async def webchat_post(msg: PostMessageSchema):
+    ensure_conversation(msg.user_id, "webchat")   # ✅ FIX
+    add_message(msg.user_id, "webchat", "user", msg.text)
+    reply = "Message received"
+    await push_with_admin(msg.user_id, "webchat",
+                          {"sender": "system", "text": reply,
+                           "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+    return {"status": "ok", "message": reply}
+
+# Twilio SMS webhook
+@app.post("/sms")
+async def sms_webhook(
+    request: Request,
+    From: str = Form(...),
+    Body: str = Form(...)
+):
+    user_id = From
+    channel = "whatsapp" if From.startswith("whatsapp:") else "sms"
+    text = Body.strip()
+
+    ensure_conversation(user_id, channel)
+    add_message(user_id, channel, "user", text)
+
+    await push_with_admin(user_id, channel,
+                          {"sender": "user", "text": text,
+                           "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+
+    resp = MessagingResponse()
+    resp.message("Thanks, we got your message!")
+    return PlainTextResponse(str(resp), media_type="application/xml")
+
+# WebSocket for webchat visitors
+@app.websocket("/ws/{user_id}")
+async def ws_endpoint(websocket: WebSocket, user_id: str):
+    await ws_manager.connect(user_id, "webchat", websocket)
+    try:
+        while True:
+            await asyncio.sleep(30)
+    except WebSocketDisconnect:
+        ws_manager.disconnect(user_id, "webchat", websocket)
+
+# WebSocket for admin dashboard (broadcast)
+admin_connections: Set[WebSocket] = set()
+
+@app.websocket("/ws/admin-dashboard")
+async def ws_admin(websocket: WebSocket):
+    await websocket.accept()
+    admin_connections.add(websocket)
+    try:
+        while True:
+            await asyncio.sleep(30)
+    except WebSocketDisconnect:
+        if websocket in admin_connections:
+            admin_connections.remove(websocket)
+
+# Helper: push to both user channel + admin dashboard
+async def push_with_admin(user_id: str, channel: str, payload: dict):
+    # push to user
+    await ws_manager.push(user_id, channel, payload)
+    # push to admin dashboards
+    for ws in list(admin_connections):
+        try:
+            # include user_id + channel for context
+            await ws.send_json({"user_id": user_id, "channel": channel, **payload})
+        except Exception:
+            admin_connections.remove(ws)

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -160,13 +160,16 @@ async function closeConvo(){
 // WebSocket for real-time updates
 let wsAdmin;
 function connectAdminWS(){
-  wsAdmin = new WebSocket(`ws://${location.host}/ws/admin-dashboard`);
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
   wsAdmin.onopen = () => console.log("Admin WS connected");
   wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      // For now, just refresh UI when any event arrives
       loadConvos();
       loadHistory();
+      // Optionally, append live messages if current convo is open
       if(current && data.sender && data.text && data.ts && data.user_id===current.user_id){
         const msgs = document.getElementById('msgs');
         const row = document.createElement('div');
