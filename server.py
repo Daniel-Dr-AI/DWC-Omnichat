@@ -346,10 +346,8 @@ async def push_with_admin(user_id: str, channel: str, payload: dict):
     if DEBUG_ADMIN_PUSH:
         logging.info(f"[DEBUG] push_with_admin → user={user_id}, channel={channel}, payload={payload}")
 
-    # push to user
-    await ws_manager.push(user_id, channel, payload)
-
-    # push to admin dashboards
+    # Only push user/staff messages to admin dashboards,
+    # not back down to the same visitor (prevents duplicates in the widget)
     for ws in list(admin_connections):
         try:
             await ws.send_json({"user_id": user_id, "channel": channel, **payload})
