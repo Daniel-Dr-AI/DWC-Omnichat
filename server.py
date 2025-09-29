@@ -278,12 +278,26 @@ def webchat_check():
 
 @app.post("/webchat")
 async def webchat_post(msg: PostMessageSchema):
-    ensure_conversation(msg.user_id, "webchat")   # ✅ FIX
-    add_message(msg.user_id, "webchat", "user", msg.text)
+    channel = msg.channel or "webchat"
+
+    ensure_conversation(msg.user_id, channel)
+    add_message(msg.user_id, channel, "user", msg.text)
+
+    # Broadcast the actual user message to admin dashboards
+    await push_with_admin(msg.user_id, channel, {
+        "sender": "user",
+        "text": msg.text,
+        "ts": datetime.datetime.utcnow().isoformat() + "Z"
+    })
+
+    # Optional system ack
     reply = "Message received"
-    await push_with_admin(msg.user_id, "webchat",
-                          {"sender": "system", "text": reply,
-                           "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+    await push_with_admin(msg.user_id, channel, {
+        "sender": "system",
+        "text": reply,
+        "ts": datetime.datetime.utcnow().isoformat() + "Z"
+    })
+
     return {"status": "ok", "message": reply}
 
 # Twilio SMS webhook
@@ -333,13 +347,18 @@ async def ws_admin(websocket: WebSocket):
             admin_connections.remove(websocket)
 
 # Helper: push to both user channel + admin dashboard
+DEBUG_ADMIN_PUSH = True  # set False in production if logs too noisy
+
 async def push_with_admin(user_id: str, channel: str, payload: dict):
+    if DEBUG_ADMIN_PUSH:
+        logging.info(f"[DEBUG] push_with_admin → user={user_id}, channel={channel}, payload={payload}")
+
     # push to user
     await ws_manager.push(user_id, channel, payload)
+
     # push to admin dashboards
     for ws in list(admin_connections):
         try:
-            # include user_id + channel for context
             await ws.send_json({"user_id": user_id, "channel": channel, **payload})
         except Exception:
             admin_connections.remove(ws)
