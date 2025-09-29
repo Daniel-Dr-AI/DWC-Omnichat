@@ -290,15 +290,8 @@ async def webchat_post(msg: PostMessageSchema):
         "ts": datetime.datetime.utcnow().isoformat() + "Z"
     })
 
-    # Optional system ack
-    reply = "Message received"
-    await push_with_admin(msg.user_id, channel, {
-        "sender": "system",
-        "text": reply,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z"
-    })
+    return {"status": "ok"}
 
-    return {"status": "ok", "message": reply}
 
 # Twilio SMS webhook
 @app.post("/sms")
