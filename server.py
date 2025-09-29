@@ -290,6 +290,14 @@ async def webchat_post(msg: PostMessageSchema):
         "ts": datetime.datetime.utcnow().isoformat() + "Z"
     })
 
+    # Immediate auto-reply for the visitor only
+    auto_msg = "Connecting you with a staff member, please wait..."
+    await ws_manager.push(msg.user_id, channel, {
+        "sender": "system",
+        "text": auto_msg,
+        "ts": datetime.datetime.utcnow().isoformat() + "Z"
+    })
+
     return {"status": "ok"}
 
 
