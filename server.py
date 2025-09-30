@@ -319,11 +319,11 @@ async def webchat_post(msg: PostMessageSchema):
 
     # Broadcast the actual user message to admin dashboards
     await push_with_admin(msg.user_id, channel, {
-        "sender": "user",
-        "text": msg.text,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z",
-        "new_convo": bool(is_new)
-    })
+    "sender": "user",
+    "text": msg.text,
+    "ts": datetime.datetime.utcnow().isoformat() + "Z",
+    "new_convo": True   # force sidebar refresh every inbound message
+})
 
     # Immediate auto-reply for the visitor only
     auto_msg = "Connecting you with a staff member, please wait..."
@@ -350,11 +350,11 @@ async def sms_webhook(
     add_message(user_id, channel, "user", text)
 
     await push_with_admin(user_id, channel, {
-        "sender": "user",
-        "text": text,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z",
-        "new_convo": bool(is_new)
-    })
+    "sender": "user",
+    "text": text,
+    "ts": datetime.datetime.utcnow().isoformat() + "Z",
+    "new_convo": True   # force sidebar refresh every inbound message
+})
 
     resp = MessagingResponse()
     resp.message("Thanks, we got your message!")
