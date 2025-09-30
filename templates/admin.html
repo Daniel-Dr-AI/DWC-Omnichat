@@ -247,12 +247,13 @@ function connectAdminWS(){
     console.log("Admin WS closed, retrying...");
     setTimeout(connectAdminWS, 3000);
   };
-}
+}  // <-- closes function connectAdminWS
 
 connectAdminWS();
 
 // Fallback: if WS is slow to connect, still show current state
 loadConvos();
+loadEscalated();
 loadHistory();
 </script>
 </body>
