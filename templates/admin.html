@@ -191,13 +191,12 @@ async function closeConvo(){
   document.getElementById('chatbox').style.display = 'none';
   loadConvos();
   loadHistory();
-}
-
 // WebSocket for real-time updates
 let wsAdmin;
 function connectAdminWS(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
+
   wsAdmin.onopen = () => {
     console.log("Admin WS connected");
     // Initial load so the dashboard isn’t blank on first paint
@@ -205,14 +204,12 @@ function connectAdminWS(){
     loadEscalated();
     loadHistory();
   };
+
   wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      // Refresh lists on any server event
-      loadConvos();
-      loadEscalated();
-      loadHistory();
-      // Append live message if current convo is open
+
+      // If the current convo is open, append the message live
       if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
         const msgs = document.getElementById('msgs');
         const row = document.createElement('div');
@@ -228,20 +225,32 @@ function connectAdminWS(){
         row.appendChild(bubble);
         msgs.appendChild(row);
         msgs.scrollTop = msgs.scrollHeight;
+      } else {
+        // If convo not open, refresh the convo lists so the new one appears
+        // Small delay ensures backend has committed the new convo
+        setTimeout(() => {
+          loadConvos();
+          loadEscalated();
+          loadHistory();
+        }, 500);
       }
-    } catch(e){
+    } catch (e) {
       console.error("Bad WS message", e);
     }
   };
+
   wsAdmin.onerror = (e) => {
     console.error("Admin WS error", e);
   };
+
   wsAdmin.onclose = () => {
     console.log("Admin WS closed, retrying...");
     setTimeout(connectAdminWS, 3000);
   };
 }
+
 connectAdminWS();
+
 // Fallback: if WS is slow to connect, still show current state
 loadConvos();
 loadHistory();
