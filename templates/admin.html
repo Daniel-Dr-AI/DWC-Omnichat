@@ -201,7 +201,7 @@ function connectAdminWS(){
     loadHistory();
   };
 
-  wsAdmin.onmessage = (event) => {
+    wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
 
@@ -221,8 +221,8 @@ function connectAdminWS(){
         row.appendChild(bubble);
         msgs.appendChild(row);
         msgs.scrollTop = msgs.scrollHeight;
-      } else if (data.new_convo) {
-        // Only reload lists if backend says this is a brand-new convo
+      } else {
+        // Always reload lists for new or unseen conversations
         setTimeout(() => {
           loadConvos();
           loadEscalated();
@@ -233,23 +233,3 @@ function connectAdminWS(){
       console.error("Bad WS message", e);
     }
   };
-
-  wsAdmin.onerror = (e) => {
-    console.error("Admin WS error", e);
-  };
-
-  wsAdmin.onclose = () => {
-    console.log("Admin WS closed, retrying...");
-    setTimeout(connectAdminWS, 3000);
-  };
-}
-
-connectAdminWS();
-
-// Fallback: if WS is slow to connect, still show current state
-loadConvos();
-loadEscalated();
-loadHistory();
-</script>
-</body>
-</html>
