@@ -54,7 +54,7 @@
 </div>
 
 <script>
-let current=null;
+let current = null;
 
 function showTab(tab){
   document.getElementById('openTab').classList.remove('active');
@@ -184,52 +184,71 @@ async function closeConvo(){
   });
   document.getElementById('chatbox').style.display = 'none';
   loadConvos();
+  loadEscalated();
   loadHistory();
 }
 
 // WebSocket for real-time updates
 let wsAdmin;
-function connectAdminWS(){
+function connectAdminWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
 
   wsAdmin.onopen = () => {
-    console.log("Admin WS connected");
-    // Initial load so the dashboard isn’t blank on first paint
+    console.log("✅ Admin WebSocket connected");
     loadConvos();
     loadEscalated();
     loadHistory();
+    showTab('open'); // default view so dashboard isn’t blank
   };
 
-    wsAdmin.onmessage = (event) => {
+  wsAdmin.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
 
-      // Append live message if current convo is open
-      if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
-        const msgs = document.getElementById('msgs');
-        const row = document.createElement('div');
-        row.className = 'msg ' + data.sender;
-        const meta = document.createElement('div');
-        meta.className = 'meta';
+      if (
+        current &&
+        data.user_id === current.user_id &&
+        data.channel === current.channel &&
+        data.sender && data.text && data.ts
+      ) {
+        const msgs = document.getElementById("msgs");
+        const row = document.createElement("div");
+        row.className = "msg " + data.sender;
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
         const ts = new Date(data.ts).toLocaleString();
         meta.textContent = `${data.sender} — ${ts}`;
-        const bubble = document.createElement('div');
-        bubble.className = 'bubble';
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
         bubble.textContent = data.text;
+
         row.appendChild(meta);
         row.appendChild(bubble);
         msgs.appendChild(row);
         msgs.scrollTop = msgs.scrollHeight;
-      } else {
-        // Always reload lists for new or unseen conversations
+      }
+
+      if (data.new_convo || !current || data.user_id !== current.user_id) {
         setTimeout(() => {
           loadConvos();
           loadEscalated();
           loadHistory();
-        }, 500);
+        }, 300);
       }
-    } catch (e) {
-      console.error("Bad WS message", e);
+    } catch (err) {
+      console.error("⚠️ Bad WS message", err, event.data);
     }
   };
+
+  wsAdmin.onclose = () => {
+    console.warn("Admin WS disconnected — retrying in 3s");
+    setTimeout(connectAdminWS, 3000);
+  };
+}
+connectAdminWS();
+</script>
+</body>
+</html>
