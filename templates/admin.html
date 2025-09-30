@@ -243,11 +243,13 @@ function connectAdminWS() {
     }
   };
 
-  wsAdmin.onclose = () => {
+    wsAdmin.onclose = () => {
     console.warn("Admin WS disconnected — retrying in 3s");
     setTimeout(connectAdminWS, 3000);
   };
 }
+
+// Boot the WebSocket connection when page loads
 connectAdminWS();
 </script>
 </body>
