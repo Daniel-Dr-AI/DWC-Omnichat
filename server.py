@@ -370,20 +370,38 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
     except WebSocketDisconnect:
         ws_manager.disconnect(user_id, "webchat", websocket)
 
-# WebSocket for admin dashboard (broadcast)
-admin_connections: Set[WebSocket] = set()
+# ========================
+# Admin WebSocket Manager
+# ========================
+class AdminWSManager:
+    def __init__(self):
+        self.connections: Set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.connections:
+            self.connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for ws in list(self.connections):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                self.disconnect(ws)
+
+admin_ws_manager = AdminWSManager()
 
 @app.websocket("/ws/admin-dashboard")
 async def ws_admin(websocket: WebSocket):
-    await websocket.accept()
-    admin_connections.add(websocket)
+    await admin_ws_manager.connect(websocket)
     try:
         while True:
             await asyncio.sleep(30)
     except WebSocketDisconnect:
-        if websocket in admin_connections:
-            admin_connections.remove(websocket)
-
+        admin_ws_manager.disconnect(websocket)
 # Helper: push to both user channel + admin dashboard
 DEBUG_ADMIN_PUSH = True  # set False in production if logs too noisy
 
@@ -397,11 +415,7 @@ async def push_with_admin(user_id: str, channel: str, payload: dict):
         await ws_manager.push(user_id, channel, payload)
 
     # Always push to admin dashboards
-    for ws in list(admin_connections):
-        try:
-            await ws.send_json({"user_id": user_id, "channel": channel, **payload})
-        except Exception:
-            admin_connections.remove(ws)
+await admin_ws_manager.broadcast({"user_id": user_id, "channel": channel, **payload})
 
 # ========================
 # Escalation Loop
