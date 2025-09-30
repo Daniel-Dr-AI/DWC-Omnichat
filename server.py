@@ -470,37 +470,21 @@ async def escalation_loop():
                             conn.commit()
                         logging.info(f"Escalation: final callback prompt sent to {row['user_id']} ({row['channel']})")
 
-# SMS manager alert if BACKUP_NUMBER is set
-if twilio_client and BACKUP_NUMBER:
-    try:
-        alert_text = (
-            f"[Escalation Alert] Conversation with {row['user_id']} "
-            f"({row['channel']}) has escalated. Visitor was asked to leave contact info."
-        )
-        twilio_client.messages.create(
-            body=alert_text,
-            from_=TWILIO_NUMBER,
-            to=BACKUP_NUMBER
-        )
-        logging.info(f"Escalation alert SMS sent to manager at {BACKUP_NUMBER}")
-    except Exception as e:
-        logging.exception(f"Failed to send escalation alert SMS: {repr(e)}")
-
-# SMS manager alert if BACKUP_NUMBER is set
-if twilio_client and BACKUP_NUMBER:
-    try:
-        alert_text = (
-            f"[Escalation Alert] Conversation with {row['user_id']} "
-            f"({row['channel']}) has escalated. Visitor was asked to leave contact info."
-        )
-        twilio_client.messages.create(
-            body=alert_text,
-            from_=TWILIO_NUMBER,
-            to=BACKUP_NUMBER
-        )
-        logging.info(f"Escalation alert SMS sent to manager at {BACKUP_NUMBER}")
-    except Exception as e:
-        logging.exception(f"Failed to send escalation alert SMS: {repr(e)}")
+                        # SMS manager alert if BACKUP_NUMBER is set
+                        if twilio_client and BACKUP_NUMBER:
+                            try:
+                                alert_text = (
+                                    f"[Escalation Alert] Conversation with {row['user_id']} "
+                                    f"({row['channel']}) has escalated. Visitor was asked to leave contact info."
+                                )
+                                twilio_client.messages.create(
+                                    body=alert_text,
+                                    from_=TWILIO_NUMBER,
+                                    to=BACKUP_NUMBER
+                                )
+                                logging.info(f"Escalation alert SMS sent to manager at {BACKUP_NUMBER}")
+                            except Exception as e:
+                                logging.exception(f"Failed to send escalation alert SMS: {repr(e)}")
 
         except Exception as e:
             logging.exception("Error in escalation_loop", exc_info=e)
