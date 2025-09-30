@@ -242,6 +242,14 @@ def admin_history():
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
 
+@app.get("/admin/api/escalated")
+def admin_escalated():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE open=1 AND final_sent=1 ORDER BY updated_at DESC")
+        rows = c.fetchall()
+    return {"conversations": [dict(r) for r in rows]}
+
 @app.get("/admin/api/messages/{channel}/{user_id}")
 def admin_messages(channel: str, user_id: str):
     return get_messages(user_id, channel)
@@ -249,6 +257,13 @@ def admin_messages(channel: str, user_id: str):
 @app.post("/admin/api/send")
 async def admin_send(msg: AdminSendSchema):
     add_message(msg.user_id, msg.channel, "staff", msg.text)
+
+    # Reset escalation flag once staff replies
+    with db() as conn:
+        conn.execute("UPDATE conversations SET final_sent=0 WHERE user_id=? AND channel=?",
+                     (msg.user_id, msg.channel))
+        conn.commit()
+
     await push_with_admin(msg.user_id, msg.channel,
                           {"sender": "staff", "text": msg.text,
                            "ts": datetime.datetime.utcnow().isoformat() + "Z"})

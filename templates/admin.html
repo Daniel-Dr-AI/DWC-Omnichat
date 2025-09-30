@@ -12,6 +12,13 @@
     #convos, #history { margin-bottom:20px; }
     .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
     .convo:hover { background:#f6fafd; }
+    .convo.escalated {
+  border: 2px solid #f87171;      /* red border */
+  background: #fee2e2;            /* light red background */
+}
+.convo.escalated:hover {
+  background: #fecaca;            /* darker red on hover */
+}
     .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
     .msg { margin:6px 0; }
     .msg .meta { color:#6b7280; font-size:12px; margin-bottom:2px; }
@@ -27,10 +34,12 @@
 <h1>DWC Admin Dashboard</h1>
 <div class="tab-buttons">
   <button id="openTab" class="active" onclick="showTab('open')">Open</button>
+  <button id="escalatedTab" onclick="showTab('escalated')">Escalated</button>
   <button id="historyTab" onclick="showTab('history')">History</button>
 </div>
 
 <div id="convos"></div>
+<div id="escalated" style="display:none;"></div>
 <div id="history" style="display:none;"></div>
 
 <div id="chatbox" style="display:none;">
@@ -52,14 +61,23 @@ let activeTab = 'open';
 function showTab(tab){
   activeTab = tab;
   document.getElementById('openTab').classList.remove('active');
+  document.getElementById('escalatedTab').classList.remove('active');
   document.getElementById('historyTab').classList.remove('active');
+
   if(tab==='open'){
     document.getElementById('openTab').classList.add('active');
     document.getElementById('convos').style.display='block';
+    document.getElementById('escalated').style.display='none';
+    document.getElementById('history').style.display='none';
+  } else if(tab==='escalated'){
+    document.getElementById('escalatedTab').classList.add('active');
+    document.getElementById('convos').style.display='none';
+    document.getElementById('escalated').style.display='block';
     document.getElementById('history').style.display='none';
   } else {
     document.getElementById('historyTab').classList.add('active');
     document.getElementById('convos').style.display='none';
+    document.getElementById('escalated').style.display='none';
     document.getElementById('history').style.display='block';
   }
 }
@@ -95,6 +113,24 @@ async function loadHistory(){
     const el = document.createElement('div');
     el.className = 'convo';
     el.textContent = `${c.user_id} (${c.channel}) — closed at ${c.updated_at}`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function loadEscalated(){
+  const res = await fetch('/admin/api/escalated');
+  const data = await res.json();
+  const div = document.getElementById('escalated');
+  div.innerHTML = '<h2>Escalated Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No escalated conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo escalated';
+    el.textContent = `${c.user_id} (${c.channel}) — awaiting callback`;
     el.onclick = ()=>openConvo(c.channel,c.user_id);
     div.appendChild(el);
   });
@@ -166,6 +202,7 @@ function connectAdminWS(){
     console.log("Admin WS connected");
     // Initial load so the dashboard isn’t blank on first paint
     loadConvos();
+    loadEscalated();
     loadHistory();
   };
   wsAdmin.onmessage = (event) => {
@@ -173,6 +210,7 @@ function connectAdminWS(){
       const data = JSON.parse(event.data);
       // Refresh lists on any server event
       loadConvos();
+      loadEscalated();
       loadHistory();
       // Append live message if current convo is open
       if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
