@@ -415,7 +415,7 @@ async def push_with_admin(user_id: str, channel: str, payload: dict):
         await ws_manager.push(user_id, channel, payload)
 
     # Always push to admin dashboards
-await admin_ws_manager.broadcast({"user_id": user_id, "channel": channel, **payload})
+    await admin_ws_manager.broadcast({"user_id": user_id, "channel": channel, **payload})
 
 # ========================
 # Escalation Loop
