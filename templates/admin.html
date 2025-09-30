@@ -1,7 +1,7 @@
-﻿<!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <title>DWC Admin Dashboard</title>
   <style>
     body { font-family: Arial, sans-serif; margin:20px; }
@@ -9,16 +9,16 @@
     .tab-buttons { margin-bottom:15px; }
     .tab-buttons button { margin-right:10px; padding:6px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; }
     .tab-buttons button.active { background:#e0f2fe; border-color:#38bdf8; }
-    #convos, #history { margin-bottom:20px; }
+    #convos, #history, #escalated { margin-bottom:20px; }
     .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
     .convo:hover { background:#f6fafd; }
     .convo.escalated {
-  border: 2px solid #f87171;      /* red border */
-  background: #fee2e2;            /* light red background */
-}
-.convo.escalated:hover {
-  background: #fecaca;            /* darker red on hover */
-}
+      border: 2px solid #f87171;      /* red border */
+      background: #fee2e2;            /* light red background */
+    }
+    .convo.escalated:hover {
+      background: #fecaca;            /* darker red on hover */
+    }
     .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
     .msg { margin:6px 0; }
     .msg .meta { color:#6b7280; font-size:12px; margin-bottom:2px; }
@@ -26,14 +26,15 @@
     .user .bubble { background:#e0f2fe; border:1px solid #bae6fd; color:#0369a1; }
     .staff .bubble { background:#dcfce7; border:1px solid #bbf7d0; color:#166534; }
     .system .bubble { background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; font-style:italic; }
-    #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; }
+    #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; display:none; }
     #actions { margin-top:10px; }
   </style>
 </head>
 <body>
 <h1>DWC Admin Dashboard</h1>
+
 <div class="tab-buttons">
-  <button id="openTab" class="active" onclick="showTab('open')">Open</button>
+  <button id="openTab" onclick="showTab('open')">Open</button>
   <button id="escalatedTab" onclick="showTab('escalated')">Escalated</button>
   <button id="historyTab" onclick="showTab('history')">History</button>
 </div>
@@ -42,42 +43,35 @@
 <div id="escalated" style="display:none;"></div>
 <div id="history" style="display:none;"></div>
 
-<div id="chatbox" style="display:none;">
-  <h2>Conversation: <span id="cid"></span> <small id="cchan"></small></h2>
-  <div class="messages" id="msgs"></div>
-  <input id="reply" style="width:70%;padding:8px;" placeholder="Type reply to user...">
-  <button onclick="send()" style="padding:8px 12px;">Send</button>
+<div id="chatbox">
+  <h2>Conversation with <span id="cid"></span> <span id="cchan"></span></h2>
+  <div id="msgs" class="messages"></div>
   <div id="actions">
-    <button onclick="closeConvo()" style="margin-top:10px; padding:6px 10px; background:#fca5a5; border:1px solid #f87171; border-radius:6px; cursor:pointer;">
-      Close Conversation
-    </button>
+    <input id="reply" type="text" style="width:80%" placeholder="Type reply..."/>
+    <button onclick="send()">Send</button>
+    <button onclick="closeConvo()">Close</button>
   </div>
 </div>
 
 <script>
-let current = null;
-let activeTab = 'open';
+let current=null;
 
 function showTab(tab){
-  activeTab = tab;
   document.getElementById('openTab').classList.remove('active');
   document.getElementById('escalatedTab').classList.remove('active');
   document.getElementById('historyTab').classList.remove('active');
+  document.getElementById('convos').style.display='none';
+  document.getElementById('escalated').style.display='none';
+  document.getElementById('history').style.display='none';
 
   if(tab==='open'){
     document.getElementById('openTab').classList.add('active');
     document.getElementById('convos').style.display='block';
-    document.getElementById('escalated').style.display='none';
-    document.getElementById('history').style.display='none';
   } else if(tab==='escalated'){
     document.getElementById('escalatedTab').classList.add('active');
-    document.getElementById('convos').style.display='none';
     document.getElementById('escalated').style.display='block';
-    document.getElementById('history').style.display='none';
   } else {
     document.getElementById('historyTab').classList.add('active');
-    document.getElementById('convos').style.display='none';
-    document.getElementById('escalated').style.display='none';
     document.getElementById('history').style.display='block';
   }
 }
@@ -192,7 +186,7 @@ async function closeConvo(){
   loadConvos();
   loadHistory();
 }
-  
+
 // WebSocket for real-time updates
 let wsAdmin;
 function connectAdminWS(){
@@ -211,7 +205,7 @@ function connectAdminWS(){
     try {
       const data = JSON.parse(event.data);
 
-      // If the current convo is open, append the message live
+      // Append live message if current convo is open
       if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
         const msgs = document.getElementById('msgs');
         const row = document.createElement('div');
@@ -227,9 +221,8 @@ function connectAdminWS(){
         row.appendChild(bubble);
         msgs.appendChild(row);
         msgs.scrollTop = msgs.scrollHeight;
-      } else {
-        // If convo not open, refresh the convo lists so the new one appears
-        // Small delay ensures backend has committed the new convo
+      } else if (data.new_convo) {
+        // Only reload lists if backend says this is a brand-new convo
         setTimeout(() => {
           loadConvos();
           loadEscalated();
@@ -249,7 +242,7 @@ function connectAdminWS(){
     console.log("Admin WS closed, retrying...");
     setTimeout(connectAdminWS, 3000);
   };
-} // closes connectAdminWS
+}
 
 connectAdminWS();
 

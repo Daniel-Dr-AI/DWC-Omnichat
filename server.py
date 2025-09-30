@@ -123,20 +123,26 @@ class AdminSendSchema(BaseModel):
 # ========================
 # Conversation Helpers
 # ========================
-def ensure_conversation(user_id: str, channel: str):
+def ensure_conversation(user_id: str, channel: str) -> bool:
     ts = datetime.datetime.utcnow().isoformat() + "Z"
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT id FROM conversations WHERE user_id=? AND channel=?",
-                  (user_id, channel))
+        c.execute("SELECT id FROM conversations WHERE user_id=? AND channel=?", (user_id, channel))
         row = c.fetchone()
         if not row:
-            c.execute("INSERT INTO conversations (user_id, channel, assigned_staff, open, updated_at) VALUES (?,?,?,?,?)",
-                      (user_id, channel, None, 1, ts))
+            c.execute(
+                "INSERT INTO conversations (user_id, channel, assigned_staff, open, updated_at) VALUES (?,?,?,?,?)",
+                (user_id, channel, None, 1, ts)
+            )
+            conn.commit()
+            return True   # new conversation created
         else:
-            c.execute("UPDATE conversations SET open=1, updated_at=? WHERE user_id=? AND channel=?",
-                      (ts, user_id, channel))
-        conn.commit()
+            c.execute(
+                "UPDATE conversations SET open=1, updated_at=? WHERE user_id=? AND channel=?",
+                (ts, user_id, channel)
+            )
+            conn.commit()
+            return False  # existing conversation
 
 def add_message(user_id: str, channel: str, sender: str, text: str):
     ts = datetime.datetime.utcnow().isoformat() + "Z"
@@ -308,14 +314,15 @@ def webchat_check():
 async def webchat_post(msg: PostMessageSchema):
     channel = msg.channel or "webchat"
 
-    ensure_conversation(msg.user_id, channel)
+    is_new = ensure_conversation(msg.user_id, channel)
     add_message(msg.user_id, channel, "user", msg.text)
 
     # Broadcast the actual user message to admin dashboards
     await push_with_admin(msg.user_id, channel, {
         "sender": "user",
         "text": msg.text,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z"
+        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+        "new_convo": bool(is_new)
     })
 
     # Immediate auto-reply for the visitor only
@@ -328,7 +335,6 @@ async def webchat_post(msg: PostMessageSchema):
 
     return {"status": "ok"}
 
-
 # Twilio SMS webhook
 @app.post("/sms")
 async def sms_webhook(
@@ -340,12 +346,15 @@ async def sms_webhook(
     channel = "whatsapp" if From.startswith("whatsapp:") else "sms"
     text = Body.strip()
 
-    ensure_conversation(user_id, channel)
+    is_new = ensure_conversation(user_id, channel)
     add_message(user_id, channel, "user", text)
 
-    await push_with_admin(user_id, channel,
-                          {"sender": "user", "text": text,
-                           "ts": datetime.datetime.utcnow().isoformat() + "Z"})
+    await push_with_admin(user_id, channel, {
+        "sender": "user",
+        "text": text,
+        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+        "new_convo": bool(is_new)
+    })
 
     resp = MessagingResponse()
     resp.message("Thanks, we got your message!")
