@@ -276,14 +276,31 @@ def admin_history():
         c = conn.cursor()
 
         # Closed conversations from conversations table
-        c.execute("SELECT user_id, channel, updated_at FROM conversations WHERE open=0 ORDER BY updated_at DESC LIMIT 50")
+        c.execute("""
+            SELECT user_id, channel, updated_at, 'conversations' as source
+            FROM conversations
+            WHERE open=0
+            ORDER BY updated_at DESC LIMIT 50
+        """)
         convos = [dict(r) for r in c.fetchall()]
 
         # Migrated followups from history table
-        c.execute("SELECT user_id, channel, migrated_at as updated_at FROM history ORDER BY migrated_at DESC LIMIT 50")
+        c.execute("""
+            SELECT user_id, channel, migrated_at as updated_at, 'history' as source
+            FROM history
+            ORDER BY migrated_at DESC LIMIT 50
+        """)
         followup_histories = [dict(r) for r in c.fetchall()]
 
-    combined = convos + followup_histories
+    # Merge and deduplicate: prefer the 'history' version if duplicate
+    merged = {}
+    for convo in convos + followup_histories:
+        key = (convo["user_id"], convo["channel"])
+        if key not in merged or convo.get("source") == "history":
+            merged[key] = convo
+
+    # Final sorted list by timestamp
+    combined = list(merged.values())
     combined.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
 
     return {"conversations": combined}
