@@ -269,7 +269,24 @@ def admin_convos():
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
 
+# ✅ Corrected: merged closed convos + migrated followups
 @app.get("/admin/api/history")
+def admin_history():
+    with db() as conn:
+        c = conn.cursor()
+
+        # Closed conversations from conversations table
+        c.execute("SELECT user_id, channel, updated_at FROM conversations WHERE open=0 ORDER BY updated_at DESC LIMIT 50")
+        convos = [dict(r) for r in c.fetchall()]
+
+        # Migrated followups from history table
+        c.execute("SELECT user_id, channel, migrated_at as updated_at FROM history ORDER BY migrated_at DESC LIMIT 50")
+        followup_histories = [dict(r) for r in c.fetchall()]
+
+    combined = convos + followup_histories
+    combined.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    return {"conversations": combined}
 
 @app.get("/admin/api/history/export")
 def export_and_purge_history():
@@ -284,22 +301,6 @@ def export_and_purge_history():
         c.execute("DELETE FROM messages WHERE ts < ?", (cutoff,))
         conn.commit()
     return {"conversations": convos, "messages": msgs}
-def admin_history():
-    with db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT * FROM conversations WHERE open=0 ORDER BY updated_at DESC LIMIT 50")
-        rows = c.fetchall()
-    return {"conversations": [dict(r) for r in rows]}
-
-
-@app.get("/admin/api/followups")
-def admin_followups():
-    with db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT * FROM followups ORDER BY ts DESC LIMIT 200")
-        rows = c.fetchall()
-    return {"followups": [dict(r) for r in rows]}
-
 
 @app.post("/admin/api/followups/clear/{fid}")
 def clear_followup(fid: int):
@@ -343,7 +344,6 @@ def clear_followup(fid: int):
 
     return {"status": "migrated", "id": fid}
 
-
 @app.get("/admin/api/escalated")
 def admin_escalated():
     with db() as conn:
@@ -351,7 +351,6 @@ def admin_escalated():
         c.execute("SELECT * FROM conversations WHERE open=1 AND final_sent=1 ORDER BY updated_at DESC")
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
-
 
 @app.get("/admin/api/messages/{channel}/{user_id}")
 def admin_messages(channel: str, user_id: str):
