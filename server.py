@@ -289,28 +289,26 @@ def admin_followups():
 def clear_followup(fid: int):
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT * FROM followups WHERE id=?", (fid,))
+        c.execute("SELECT user_id, channel, name, contact, message, created_at FROM followups WHERE id=?", (fid,))
         row = c.fetchone()
         if row:
+            # Insert into history as a closed conversation + message
+            user_id, channel, name, contact, message, created_at = row
+
+            # Add message into messages log
+            summary_text = f"[Follow-up closed] Name: {name}, Contact: {contact}, Message: {message}"
             ts = datetime.datetime.utcnow().isoformat() + "Z"
-            # Save into history/messages
-            summary = (
-                f"[Follow-up closed] Name: {row['name']} | Contact: {row['contact']} | "
-                f"Message: {row['message']}"
-            )
-            c.execute(
-                "INSERT INTO messages (user_id, channel, sender, text, ts) VALUES (?,?,?,?,?)",
-                (row["user_id"], row["channel"], "system", summary, ts),
-            )
-            # Mark conversation as closed
-            c.execute(
-                "UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
-                (ts, row["user_id"], row["channel"]),
-            )
-            # Delete from followups
+            c.execute("INSERT INTO messages (user_id, channel, sender, text, ts) VALUES (?,?,?,?,?)",
+                      (user_id, channel, "system", summary_text, ts))
+
+            # Ensure conversation is marked closed
+            c.execute("UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
+                      (ts, user_id, channel))
+
+            # Delete follow-up entry
             c.execute("DELETE FROM followups WHERE id=?", (fid,))
         conn.commit()
-    return {"status": "cleared"}
+    return {"status": "migrated_to_history"}
 @app.get("/admin/api/escalated")
 def admin_escalated():
     with db() as conn:
