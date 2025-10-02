@@ -92,6 +92,15 @@ def db_init():
             sender TEXT, text TEXT, ts TEXT
         )""")
 
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS followups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT, channel TEXT,
+            name TEXT, contact TEXT,
+            message TEXT, ts TEXT
+        )
+        """)
+
         # Backward compatibility: add new columns if missing
         try:
             c.execute("ALTER TABLE conversations ADD COLUMN patience_sent INTEGER DEFAULT 0")
@@ -121,6 +130,14 @@ class AdminSendSchema(BaseModel):
     user_id: str
     channel: str
     text: str
+
+
+class FollowupSchema(BaseModel):
+    user_id: str
+    channel: str = "webchat"
+    name: str
+    contact: str
+    message: str
 
 # ========================
 # Conversation Helpers
@@ -238,6 +255,20 @@ def admin_convos():
     return {"conversations": [dict(r) for r in rows]}
 
 @app.get("/admin/api/history")
+
+@app.get("/admin/api/history/export")
+def export_and_purge_history():
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=30)).isoformat() + "Z"
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM conversations WHERE updated_at < ?", (cutoff,))
+        convos = [dict(r) for r in c.fetchall()]
+        c.execute("SELECT * FROM messages WHERE ts < ?", (cutoff,))
+        msgs = [dict(r) for r in c.fetchall()]
+        c.execute("DELETE FROM conversations WHERE updated_at < ?", (cutoff,))
+        c.execute("DELETE FROM messages WHERE ts < ?", (cutoff,))
+        conn.commit()
+    return {"conversations": convos, "messages": msgs}
 def admin_history():
     with db() as conn:
         c = conn.cursor()
@@ -245,6 +276,41 @@ def admin_history():
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
 
+
+@app.get("/admin/api/followups")
+def admin_followups():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM followups ORDER BY ts DESC LIMIT 200")
+        rows = c.fetchall()
+    return {"followups": [dict(r) for r in rows]}
+
+@app.post("/admin/api/followups/clear/{fid}")
+def clear_followup(fid: int):
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM followups WHERE id=?", (fid,))
+        row = c.fetchone()
+        if row:
+            ts = datetime.datetime.utcnow().isoformat() + "Z"
+            # Save into history/messages
+            summary = (
+                f"[Follow-up closed] Name: {row['name']} | Contact: {row['contact']} | "
+                f"Message: {row['message']}"
+            )
+            c.execute(
+                "INSERT INTO messages (user_id, channel, sender, text, ts) VALUES (?,?,?,?,?)",
+                (row["user_id"], row["channel"], "system", summary, ts),
+            )
+            # Mark conversation as closed
+            c.execute(
+                "UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
+                (ts, row["user_id"], row["channel"]),
+            )
+            # Delete from followups
+            c.execute("DELETE FROM followups WHERE id=?", (fid,))
+        conn.commit()
+    return {"status": "cleared"}
 @app.get("/admin/api/escalated")
 def admin_escalated():
     with db() as conn:
@@ -295,6 +361,38 @@ async def admin_send(msg: AdminSendSchema):
             except Exception as e:
                 logging.exception(f"Twilio send failed with exception: {repr(e)}")
 
+    return {"status": "ok"}
+
+
+@app.post("/followup")
+async def followup_submit(data: FollowupSchema):
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    # write to followups
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO followups (user_id, channel, name, contact, message, ts) VALUES (?,?,?,?,?,?)",
+            (data.user_id, data.channel, data.name, data.contact, data.message, ts),
+        )
+        # close the conversation so escalation loop won't re-fire
+        conn.execute("UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
+                     (ts, data.user_id, data.channel))
+        conn.commit()
+
+    # thank-you system message goes to history
+    add_message(data.user_id, data.channel, "system", "✅ Thank you for your message. Our team will respond promptly.")
+
+    # push to visitor
+    await ws_manager.push(data.user_id, data.channel, {
+        "sender": "system",
+        "text": "✅ Thank you for your message. Our team will respond promptly.",
+        "ts": ts
+    })
+
+    # notify admin dashboards
+    await push_with_admin(
+        data.user_id, data.channel,
+        {"sender": "system", "text": f"[Follow-up submitted by visitor]", "ts": ts}
+    )
     return {"status": "ok"}
 
 @app.post("/handoff/close")

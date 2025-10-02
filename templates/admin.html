@@ -1,4 +1,3 @@
-﻿<link rel="icon" href="data:,">
 <!DOCTYPE html>
 <html>
 <head>
@@ -10,16 +9,11 @@
     .tab-buttons { margin-bottom:15px; }
     .tab-buttons button { margin-right:10px; padding:6px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; }
     .tab-buttons button.active { background:#e0f2fe; border-color:#38bdf8; }
-    #convos, #history { margin-bottom:20px; }
+    #convos, #history, #escalated, #followups { margin-bottom:20px; }
     .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
     .convo:hover { background:#f6fafd; }
-    .convo.escalated {
-  border: 2px solid #f87171;      /* red border */
-  background: #fee2e2;            /* light red background */
-}
-.convo.escalated:hover {
-  background: #fecaca;            /* darker red on hover */
-}
+    .convo.escalated { border: 2px solid #f87171; background: #fee2e2; }
+    .convo.escalated:hover { background: #fecaca; }
     .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
     .msg { margin:6px 0; }
     .msg .meta { color:#6b7280; font-size:12px; margin-bottom:2px; }
@@ -29,6 +23,8 @@
     .system .bubble { background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; font-style:italic; }
     #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; }
     #actions { margin-top:10px; }
+    .followup-item { display:flex; align-items:center; justify-content:space-between; border:1px solid #ddd; padding:8px; border-radius:8px; margin:6px 0; }
+    .followup-text { flex:1; padding-right:8px; }
   </style>
 </head>
 <body>
@@ -36,11 +32,13 @@
 <div class="tab-buttons">
   <button id="openTab" class="active" onclick="showTab('open')">Open</button>
   <button id="escalatedTab" onclick="showTab('escalated')">Escalated</button>
+  <button id="followupsTab" onclick="showTab('followups')">Follow-ups</button>
   <button id="historyTab" onclick="showTab('history')">History</button>
 </div>
 
 <div id="convos"></div>
 <div id="escalated" style="display:none;"></div>
+<div id="followups" style="display:none;"></div>
 <div id="history" style="display:none;"></div>
 
 <div id="chatbox" style="display:none;">
@@ -67,21 +65,24 @@ function showTab(tab){
   document.getElementById('openTab').classList.remove('active');
   document.getElementById('escalatedTab').classList.remove('active');
   document.getElementById('historyTab').classList.remove('active');
+  document.getElementById('followupsTab').classList.remove('active');
+
+  document.getElementById('convos').style.display='none';
+  document.getElementById('escalated').style.display='none';
+  document.getElementById('history').style.display='none';
+  document.getElementById('followups').style.display='none';
 
   if(tab==='open'){
     document.getElementById('openTab').classList.add('active');
     document.getElementById('convos').style.display='block';
-    document.getElementById('escalated').style.display='none';
-    document.getElementById('history').style.display='none';
   } else if(tab==='escalated'){
     document.getElementById('escalatedTab').classList.add('active');
-    document.getElementById('convos').style.display='none';
     document.getElementById('escalated').style.display='block';
-    document.getElementById('history').style.display='none';
-  } else {
+  } else if(tab==='followups'){
+    document.getElementById('followupsTab').classList.add('active');
+    document.getElementById('followups').style.display='block';
+  } else if(tab==='history'){
     document.getElementById('historyTab').classList.add('active');
-    document.getElementById('convos').style.display='none';
-    document.getElementById('escalated').style.display='none';
     document.getElementById('history').style.display='block';
   }
 }
@@ -91,10 +92,7 @@ async function loadConvos(){
   const data = await res.json();
   const div = document.getElementById('convos');
   div.innerHTML = '<h2>Open Conversations</h2>';
-  if(!data.conversations.length){ 
-    div.innerHTML += '<p>No open conversations.</p>'; 
-    return; 
-  }
+  if(!data.conversations.length){ div.innerHTML += '<p>No open conversations.</p>'; return; }
   data.conversations.forEach(c=>{
     const el = document.createElement('div');
     el.className = 'convo';
@@ -108,11 +106,8 @@ async function loadHistory(){
   const res = await fetch('/admin/api/history');
   const data = await res.json();
   const div = document.getElementById('history');
-  div.innerHTML = '<h2>Closed Conversations</h2>';
-  if(!data.conversations.length){ 
-    div.innerHTML += '<p>No closed conversations.</p>'; 
-    return; 
-  }
+  div.innerHTML = '<h2>Closed Conversations</h2> <button id=\"exportBtn\" onclick=\"exportHistory()\" style=\"margin-left:10px; padding:4px 8px; border:1px solid #3b82f6; border-radius:6px; background:#60a5fa; cursor:pointer;\">Download & Purge Old History</button>';
+  if(!data.conversations.length){ div.innerHTML += '<p>No closed conversations.</p>'; return; }
   data.conversations.forEach(c=>{
     const el = document.createElement('div');
     el.className = 'convo';
@@ -127,16 +122,38 @@ async function loadEscalated(){
   const data = await res.json();
   const div = document.getElementById('escalated');
   div.innerHTML = '<h2>Escalated Conversations</h2>';
-  if(!data.conversations.length){ 
-    div.innerHTML += '<p>No escalated conversations.</p>'; 
-    return; 
-  }
+  if(!data.conversations.length){ div.innerHTML += '<p>No escalated conversations.</p>'; return; }
   data.conversations.forEach(c=>{
     const el = document.createElement('div');
     el.className = 'convo escalated';
     el.textContent = `${c.user_id} (${c.channel}) — awaiting callback`;
     el.onclick = ()=>openConvo(c.channel,c.user_id);
     div.appendChild(el);
+  });
+}
+
+async function loadFollowups(){
+  const res = await fetch('/admin/api/followups');
+  const data = await res.json();
+  const div = document.getElementById('followups');
+  div.innerHTML = '<h2>Follow-up Messages</h2>';
+  if(!data.followups.length){ div.innerHTML += '<p>No follow-ups.</p>'; return; }
+  data.followups.forEach(f=>{
+    const row = document.createElement('div');
+    row.className = 'followup-item';
+    const text = document.createElement('div');
+    text.className = 'followup-text';
+    const when = f.ts ? new Date(f.ts).toLocaleString() : "";
+    text.textContent = `${f.name} (${f.contact}) — ${f.message} ${when ? " — " + when : ""}`;
+    const btn = document.createElement('button');
+    btn.textContent = "Mark Handled";
+    btn.onclick = async () => {
+      await fetch('/admin/api/followups/clear/' + f.id, {method:'POST'});
+      loadFollowups();
+      loadHistory();
+    };
+    row.appendChild(text); row.appendChild(btn);
+    div.appendChild(row);
   });
 }
 
@@ -147,12 +164,8 @@ async function openConvo(channel,user_id){
   document.getElementById('chatbox').style.display = 'block';
 
   const res = await fetch(`/admin/api/messages/${channel}/${user_id}`);
-  if (!res.ok) {
-    console.error("Failed to fetch messages", res.status);
-    return;
-  }
+  if (!res.ok) { console.error("Failed to fetch messages", res.status); return; }
   const data = await res.json();
-
   const msgs = document.getElementById('msgs');
   msgs.innerHTML = '';
   (data.messages || []).forEach(m=>{
@@ -165,7 +178,7 @@ async function openConvo(channel,user_id){
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
     bubble.textContent = m.text;
-    row.appendChild(meta); 
+    row.appendChild(meta);
     row.appendChild(bubble);
     msgs.appendChild(row);
   });
@@ -193,74 +206,41 @@ async function closeConvo(){
     body:JSON.stringify({...current})
   });
   document.getElementById('chatbox').style.display = 'none';
-  loadConvos();
-  loadHistory();
+  loadConvos(); loadHistory();
 }
 
-// WebSocket for real-time updates
 let wsAdmin;
 function connectAdminWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-    wsAdmin = new WebSocket(`${proto}://${location.host}/admin-ws`);
-
+  wsAdmin = new WebSocket(`${proto}://${location.host}/admin-ws`);
   wsAdmin.onopen = () => {
     console.log("Admin WS connected");
-    // Initial load so the dashboard isn’t blank on first paint
-    loadConvos();
-    loadEscalated();
-    loadHistory();
+    loadConvos(); loadEscalated(); loadHistory(); loadFollowups();
   };
-
   wsAdmin.onmessage = (event) => {
-  try {
-    const data = JSON.parse(event.data);
-    console.log("[admin] WS message received:", data);
-
-    // Handle snapshot (full conversation)
-    if (data.type === "snapshot") {
-      const convo = data.data;
-      if (!current) {
-        openConvo(convo.channel, convo.user_id);
+    try {
+      const data = JSON.parse(event.data);
+      console.log("[admin] WS message received:", data);
+      if (data.type === "snapshot") {
+        if (!current) openConvo(data.data.channel, data.data.user_id);
+        return;
       }
-      return;
-    }
-
-    // Handle enriched message push (sender/text/type/ts)
-    if (
-      current &&
-      current.user_id === data.user_id &&
-      current.channel === data.channel
-    ) {
-      if (data.type === "typing") {
-        showTyping(true);
-      } else if (data.type === "stop_typing") {
-        showTyping(false);
-      } else {
-        appendIncomingMessage(data);
+      if (current && current.user_id === data.user_id && current.channel === data.channel) {
+        if (data.type === "typing") showTyping(true);
+        else if (data.type === "stop_typing") showTyping(false);
+        else appendIncomingMessage(data);
       }
+      if (!current && data.user_id && data.channel) openConvo(data.channel, data.user_id);
+      loadConvos(); loadEscalated(); loadHistory(); loadFollowups();
+    } catch (err) {
+      console.error("Failed to parse WS message", err, event.data);
     }
-
-    // Auto-open convo if none is selected
-    if (!current) {
-      openConvo(data.channel, data.user_id);
-    }
-
-    // Refresh conversation lists
-    loadConvos();
-    loadEscalated();
-    loadHistory();
-  } catch (err) {
-    console.error("Failed to parse WS message", err, event.data);
-  }
   };
-} 
+}
 connectAdminWS();
+loadConvos(); loadHistory();
 
-// Fallback: if WS is slow to connect, still show current state
-loadConvos();
-loadHistory();
-// --- Typing indicator helpers ---
-let typingUiTimer = null, typingAutoHideTimer = null;
+let typingUiTimer=null, typingAutoHideTimer=null;
 function showTyping(show){
   const ind=document.getElementById('typingIndicator');
   const dots=document.getElementById('typingDots');
@@ -268,11 +248,7 @@ function showTyping(show){
   if(show){
     ind.style.display='block';
     if(typingUiTimer) clearInterval(typingUiTimer);
-    let n=1;
-    typingUiTimer=setInterval(()=>{
-      n=(n%3)+1;
-      dots.textContent='.'.repeat(n);
-    },500);
+    let n=1; typingUiTimer=setInterval(()=>{n=(n%3)+1; dots.textContent='.'.repeat(n);},500);
     if(typingAutoHideTimer) clearTimeout(typingAutoHideTimer);
     typingAutoHideTimer=setTimeout(()=>showTyping(false),3000);
   } else {
@@ -281,52 +257,49 @@ function showTyping(show){
     if(typingAutoHideTimer){ clearTimeout(typingAutoHideTimer); typingAutoHideTimer=null; }
   }
 }
-// --- Staff typing events (send to visitor) ---
+
 const replyInput = document.getElementById('reply');
 let staffTypingTimeout;
 replyInput.addEventListener("input", () => {
   if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
-    wsAdmin.send(JSON.stringify({
-      type: "typing",
-      user_id: current.user_id,
-      channel: current.channel
-    }));
+    wsAdmin.send(JSON.stringify({ type:"typing", user_id:current.user_id, channel:current.channel }));
   }
   clearTimeout(staffTypingTimeout);
-  staffTypingTimeout = setTimeout(() => {
+  staffTypingTimeout=setTimeout(()=>{
     if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
-      wsAdmin.send(JSON.stringify({
-        type: "stop_typing",
-        user_id: current.user_id,
-        channel: current.channel
-      }));
+      wsAdmin.send(JSON.stringify({ type:"stop_typing", user_id:current.user_id, channel:current.channel }));
     }
-  }, 1500);
+  },1500);
 });
-// helper to append incoming messages to the current chat window
-function appendIncomingMessage(data) {
-  const msgs = document.getElementById("msgs");
-  if (!msgs) return;
 
-  const row = document.createElement("div");
-  row.className = "msg " + (data.sender || "system");
+function appendIncomingMessage(data){
+  const msgs=document.getElementById("msgs"); if(!msgs) return;
+  const row=document.createElement("div"); row.className="msg "+(data.sender||"system");
+  const meta=document.createElement("div"); meta.className="meta";
+  const ts=data.ts ? new Date(data.ts).toLocaleString() : ""; meta.textContent=`${data.sender||"system"}${ts?" — "+ts:""}`;
+  const bubble=document.createElement("div"); bubble.className="bubble"; bubble.textContent=data.text||"";
+  row.appendChild(meta); row.appendChild(bubble); msgs.appendChild(row); msgs.scrollTop=msgs.scrollHeight; showTyping(false);
+}
 
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  const ts = data.ts ? new Date(data.ts).toLocaleString() : "";
-  meta.textContent = `${data.sender || "system"}${ts ? " — " + ts : ""}`;
-
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.textContent = data.text || "";
-
-  row.appendChild(meta);
-  row.appendChild(bubble);
-  msgs.appendChild(row);
-  msgs.scrollTop = msgs.scrollHeight;
-
-  // hide typing indicator once message lands
-  showTyping(false);
+async function exportHistory(){
+  try{
+    const res = await fetch('/admin/api/history/export');
+    if(!res.ok){ console.error('Export failed', res.status); return; }
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'history_export_' + new Date().toISOString().slice(0,10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    // Refresh history list
+    if (typeof loadHistory === 'function') loadHistory();
+  }catch(err){
+    console.error('Export error', err);
+  }
 }
 </script>
 </body>
