@@ -300,6 +300,7 @@ def admin_followups():
         rows = c.fetchall()
     return {"followups": [dict(r) for r in rows]}
 
+
 @app.post("/admin/api/followups/clear/{fid}")
 def clear_followup(fid: int):
     with db() as conn:
@@ -314,13 +315,35 @@ def clear_followup(fid: int):
         c.execute("""
             INSERT INTO history (user_id, channel, name, contact, message, ts, migrated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (row["user_id"], row["channel"], row["name"], row["contact"], row["message"], row["ts"], datetime.datetime.utcnow().isoformat()+"Z"))
+        """, (
+            row["user_id"],
+            row["channel"],
+            row["name"],
+            row["contact"],
+            row["message"],
+            row["ts"],
+            datetime.datetime.utcnow().isoformat()+"Z"
+        ))
+
+        # Step 2b: also log followup in messages so it appears in history threads
+        c.execute("""
+            INSERT INTO messages (user_id, channel, sender, text, ts)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            row["user_id"],
+            row["channel"],
+            "system",
+            f"Follow-up submitted:\nName: {row['name']}\nContact: {row['contact']}\nMessage: {row['message']}",
+            row["ts"]
+        ))
 
         # Step 3: delete from followups
         c.execute("DELETE FROM followups WHERE id=?", (fid,))
         conn.commit()
 
     return {"status": "migrated", "id": fid}
+
+
 @app.get("/admin/api/escalated")
 def admin_escalated():
     with db() as conn:
@@ -329,14 +352,15 @@ def admin_escalated():
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
 
+
 @app.get("/admin/api/messages/{channel}/{user_id}")
 def admin_messages(channel: str, user_id: str):
     return get_messages(user_id, channel)
 
+
 @app.post("/admin/api/send")
 async def admin_send(msg: AdminSendSchema):
     add_message(msg.user_id, msg.channel, "staff", msg.text)
-
     # Reset escalation flag once staff replies
     with db() as conn:
         conn.execute("UPDATE conversations SET final_sent=0 WHERE user_id=? AND channel=?",

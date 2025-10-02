@@ -1,0 +1,333 @@
+﻿<link rel="icon" href="data:,">
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>DWC Admin Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin:20px; }
+    h1 { margin-bottom: 8px; }
+    .tab-buttons { margin-bottom:15px; }
+    .tab-buttons button { margin-right:10px; padding:6px 12px; border:1px solid #ccc; border-radius:6px; cursor:pointer; }
+    .tab-buttons button.active { background:#e0f2fe; border-color:#38bdf8; }
+    #convos, #history { margin-bottom:20px; }
+    .convo { border:1px solid #ccc; padding:10px; margin:6px 0; cursor:pointer; border-radius:8px; }
+    .convo:hover { background:#f6fafd; }
+    .convo.escalated {
+  border: 2px solid #f87171;      /* red border */
+  background: #fee2e2;            /* light red background */
+}
+.convo.escalated:hover {
+  background: #fecaca;            /* darker red on hover */
+}
+    .messages { max-height:260px; overflow:auto; background:#f9f9f9; margin:10px 0; padding:10px; border-radius:8px; border:1px solid #e5e7eb;}
+    .msg { margin:6px 0; }
+    .msg .meta { color:#6b7280; font-size:12px; margin-bottom:2px; }
+    .bubble { display:inline-block; padding:8px 10px; border-radius:10px; }
+    .user .bubble { background:#e0f2fe; border:1px solid #bae6fd; color:#0369a1; }
+    .staff .bubble { background:#dcfce7; border:1px solid #bbf7d0; color:#166534; }
+    .system .bubble { background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; font-style:italic; }
+    #chatbox { border:1px solid #e5e7eb; border-radius:10px; padding:12px; }
+    #actions { margin-top:10px; }
+  </style>
+</head>
+<body>
+<h1>DWC Admin Dashboard</h1>
+<div class="tab-buttons">
+  <button id="openTab" class="active" onclick="showTab('open')">Open</button>
+  <button id="escalatedTab" onclick="showTab('escalated')">Escalated</button>
+  <button id="historyTab" onclick="showTab('history')">History</button>
+</div>
+
+<div id="convos"></div>
+<div id="escalated" style="display:none;"></div>
+<div id="history" style="display:none;"></div>
+
+<div id="chatbox" style="display:none;">
+  <h2>Conversation: <span id="cid"></span> <small id="cchan"></small></h2>
+  <div class="messages" id="msgs"></div>
+  <div id="typingIndicator" style="display:none; margin:6px 0; color:#6b7280; font-style:italic;">
+    User is typing<span id="typingDots">.</span>
+  </div>
+  <input id="reply" style="width:70%;padding:8px;" placeholder="Type reply to user...">
+  <button onclick="send()" style="padding:8px 12px;">Send</button>
+  <div id="actions">
+    <button onclick="closeConvo()" style="margin-top:10px; padding:6px 10px; background:#fca5a5; border:1px solid #f87171; border-radius:6px; cursor:pointer;">
+      Close Conversation
+    </button>
+  </div>
+</div>
+
+<script>
+let current = null;
+let activeTab = 'open';
+
+function showTab(tab){
+  activeTab = tab;
+  document.getElementById('openTab').classList.remove('active');
+  document.getElementById('escalatedTab').classList.remove('active');
+  document.getElementById('historyTab').classList.remove('active');
+
+  if(tab==='open'){
+    document.getElementById('openTab').classList.add('active');
+    document.getElementById('convos').style.display='block';
+    document.getElementById('escalated').style.display='none';
+    document.getElementById('history').style.display='none';
+  } else if(tab==='escalated'){
+    document.getElementById('escalatedTab').classList.add('active');
+    document.getElementById('convos').style.display='none';
+    document.getElementById('escalated').style.display='block';
+    document.getElementById('history').style.display='none';
+  } else {
+    document.getElementById('historyTab').classList.add('active');
+    document.getElementById('convos').style.display='none';
+    document.getElementById('escalated').style.display='none';
+    document.getElementById('history').style.display='block';
+  }
+}
+
+async function loadConvos(){
+  const res = await fetch('/admin/api/convos');
+  const data = await res.json();
+  const div = document.getElementById('convos');
+  div.innerHTML = '<h2>Open Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No open conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo';
+    el.textContent = `${c.user_id} (${c.channel}) — staff: ${c.assigned_staff || 'unassigned'}`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function loadHistory(){
+  const res = await fetch('/admin/api/history');
+  const data = await res.json();
+  const div = document.getElementById('history');
+  div.innerHTML = '<h2>Closed Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No closed conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo';
+    el.textContent = `${c.user_id} (${c.channel}) — closed at ${c.updated_at}`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function loadEscalated(){
+  const res = await fetch('/admin/api/escalated');
+  const data = await res.json();
+  const div = document.getElementById('escalated');
+  div.innerHTML = '<h2>Escalated Conversations</h2>';
+  if(!data.conversations.length){ 
+    div.innerHTML += '<p>No escalated conversations.</p>'; 
+    return; 
+  }
+  data.conversations.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'convo escalated';
+    el.textContent = `${c.user_id} (${c.channel}) — awaiting callback`;
+    el.onclick = ()=>openConvo(c.channel,c.user_id);
+    div.appendChild(el);
+  });
+}
+
+async function openConvo(channel,user_id){
+  current = {channel,user_id};
+  document.getElementById('cid').textContent = user_id;
+  document.getElementById('cchan').textContent = '('+channel+')';
+  document.getElementById('chatbox').style.display = 'block';
+
+  const res = await fetch(`/admin/api/messages/${channel}/${user_id}`);
+  if (!res.ok) {
+    console.error("Failed to fetch messages", res.status);
+    return;
+  }
+  const data = await res.json();
+
+  const msgs = document.getElementById('msgs');
+  msgs.innerHTML = '';
+  (data.messages || []).forEach(m=>{
+    const row = document.createElement('div');
+    row.className = 'msg ' + m.sender;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const ts = m.ts ? new Date(m.ts).toLocaleString() : "";
+    meta.textContent = `${m.sender}${ts ? " — " + ts : ""}`;
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = m.text;
+    row.appendChild(meta); 
+    row.appendChild(bubble);
+    msgs.appendChild(row);
+  });
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+async function send(){
+  if(!current) return;
+  const text = document.getElementById('reply').value.trim();
+  if(!text) return;
+  document.getElementById('reply').value='';
+  await fetch('/admin/api/send',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...current,text})
+  });
+  openConvo(current.channel,current.user_id);
+}
+
+async function closeConvo(){
+  if(!current) return;
+  await fetch('/handoff/close',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...current})
+  });
+  document.getElementById('chatbox').style.display = 'none';
+  loadConvos();
+  loadHistory();
+}
+
+// WebSocket for real-time updates
+let wsAdmin;
+function connectAdminWS() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+    wsAdmin = new WebSocket(`${proto}://${location.host}/admin-ws`);
+
+  wsAdmin.onopen = () => {
+    console.log("Admin WS connected");
+    // Initial load so the dashboard isn’t blank on first paint
+    loadConvos();
+    loadEscalated();
+    loadHistory();
+  };
+
+  wsAdmin.onmessage = (event) => {
+  try {
+    const data = JSON.parse(event.data);
+    console.log("[admin] WS message received:", data);
+
+    // Handle snapshot (full conversation)
+    if (data.type === "snapshot") {
+      const convo = data.data;
+      if (!current) {
+        openConvo(convo.channel, convo.user_id);
+      }
+      return;
+    }
+
+    // Handle enriched message push (sender/text/type/ts)
+    if (
+      current &&
+      current.user_id === data.user_id &&
+      current.channel === data.channel
+    ) {
+      if (data.type === "typing") {
+        showTyping(true);
+      } else if (data.type === "stop_typing") {
+        showTyping(false);
+      } else {
+        appendIncomingMessage(data);
+      }
+    }
+
+    // Auto-open convo if none is selected
+    if (!current) {
+      openConvo(data.channel, data.user_id);
+    }
+
+    // Refresh conversation lists
+    loadConvos();
+    loadEscalated();
+    loadHistory();
+  } catch (err) {
+    console.error("Failed to parse WS message", err, event.data);
+  }
+  };
+} 
+connectAdminWS();
+
+// Fallback: if WS is slow to connect, still show current state
+loadConvos();
+loadHistory();
+// --- Typing indicator helpers ---
+let typingUiTimer = null, typingAutoHideTimer = null;
+function showTyping(show){
+  const ind=document.getElementById('typingIndicator');
+  const dots=document.getElementById('typingDots');
+  if(!ind||!dots) return;
+  if(show){
+    ind.style.display='block';
+    if(typingUiTimer) clearInterval(typingUiTimer);
+    let n=1;
+    typingUiTimer=setInterval(()=>{
+      n=(n%3)+1;
+      dots.textContent='.'.repeat(n);
+    },500);
+    if(typingAutoHideTimer) clearTimeout(typingAutoHideTimer);
+    typingAutoHideTimer=setTimeout(()=>showTyping(false),3000);
+  } else {
+    ind.style.display='none';
+    if(typingUiTimer){ clearInterval(typingUiTimer); typingUiTimer=null; }
+    if(typingAutoHideTimer){ clearTimeout(typingAutoHideTimer); typingAutoHideTimer=null; }
+  }
+}
+// --- Staff typing events (send to visitor) ---
+const replyInput = document.getElementById('reply');
+let staffTypingTimeout;
+replyInput.addEventListener("input", () => {
+  if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
+    wsAdmin.send(JSON.stringify({
+      type: "typing",
+      user_id: current.user_id,
+      channel: current.channel
+    }));
+  }
+  clearTimeout(staffTypingTimeout);
+  staffTypingTimeout = setTimeout(() => {
+    if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
+      wsAdmin.send(JSON.stringify({
+        type: "stop_typing",
+        user_id: current.user_id,
+        channel: current.channel
+      }));
+    }
+  }, 1500);
+});
+// helper to append incoming messages to the current chat window
+function appendIncomingMessage(data) {
+  const msgs = document.getElementById("msgs");
+  if (!msgs) return;
+
+  const row = document.createElement("div");
+  row.className = "msg " + (data.sender || "system");
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const ts = data.ts ? new Date(data.ts).toLocaleString() : "";
+  meta.textContent = `${data.sender || "system"}${ts ? " — " + ts : ""}`;
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = data.text || "";
+
+  row.appendChild(meta);
+  row.appendChild(bubble);
+  msgs.appendChild(row);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  // hide typing indicator once message lands
+  showTyping(false);
+}
+</script>
+</body>
+</html>

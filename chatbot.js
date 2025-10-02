@@ -4,56 +4,15 @@ document.addEventListener("DOMContentLoaded", function () {
   // ========================
   const container = document.createElement("div");
   container.innerHTML = `
-    <style>
-      #chat-toggle {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background: #2563eb;
-        color: white;
-        padding: 12px 16px;
-        border-radius: 50%;
-        cursor: pointer;
-        font-size: 20px;
-        z-index: 9999;
-      }
-      #chat-box {
-        position: fixed;
-        bottom: 80px;
-        right: 20px;
-        width: 300px;
-        height: 400px;
-        border: 1px solid #ccc;
-        background: white;
-        border-radius: 8px;
-        display: flex;
-        flex-direction: column;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        z-index: 9999;
-      }
-      #messages {
-        flex: 1;
-        overflow-y: auto;
-        padding: 8px;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-      }
-      .user { color: blue; }
-      .staff { color: green; }
-      .system { color: #666; font-style: italic; }
-
-      #typingIndicator {
-        display: none;
-        padding: 4px 10px;
-        color: gray;
-        font-style: italic;
-      }
-    </style>
-
     <div id="chat-toggle">💬</div>
-    <div id="chat-box" style="display:none;">
-      <div id="messages"></div>
-      <div id="typingIndicator">Staff is typing<span id="typingDots">.</span></div>
+    <div id="chat-box" style="display:none; flex-direction:column;">
+      <div id="messages" style="flex:1; overflow-y:auto; padding:8px;"></div>
+
+      <!-- ✅ Typing indicator -->
+      <div id="typingIndicator" style="display:none; padding:4px; font-style:italic; color:gray;">
+        Staff is typing<span id="typingDots">.</span>
+      </div>
+
       <div id="input-box" style="display:flex; gap:4px; padding:8px;">
         <input id="msgInput" type="text" placeholder="Type a message..." style="flex:1;" />
         <button id="sendBtn">Send</button>
@@ -71,7 +30,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const typingIndicator = document.getElementById("typingIndicator");
   const typingDots = document.getElementById("typingDots");
 
-  // Use Render URL (adjust to your deployed backend)
+  // 🔑 Render backend (adjust if self-hosted)
   const BASE_URL = "https://dwc-omnichat.onrender.com";
 
   // Persistent visitor ID
@@ -82,12 +41,16 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   let ws;
-  let typingTimeout = null;
-  let typingDotTimer = null;
+  let typingTimeout;
+  let typingTimer = null;
+  let typingAutoHideTimer = null;
 
+  // ========================
+  // Helpers
+  // ========================
   function appendMessage(sender, text, type = "system") {
     const div = document.createElement("div");
-    div.className = type;
+    div.className = type; // user | staff | system
     div.innerHTML = `<strong>${sender}:</strong> ${text}`;
     messagesDiv.appendChild(div);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -95,18 +58,21 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function showTyping(show) {
     if (!typingIndicator || !typingDots) return;
-
     if (show) {
       typingIndicator.style.display = "block";
-      if (typingDotTimer) clearInterval(typingDotTimer);
       let n = 1;
-      typingDotTimer = setInterval(() => {
+      if (typingTimer) clearInterval(typingTimer);
+      typingTimer = setInterval(() => {
         n = (n % 3) + 1;
         typingDots.textContent = ".".repeat(n);
       }, 500);
+
+      if (typingAutoHideTimer) clearTimeout(typingAutoHideTimer);
+      typingAutoHideTimer = setTimeout(() => showTyping(false), 3000);
     } else {
       typingIndicator.style.display = "none";
-      if (typingDotTimer) clearInterval(typingDotTimer);
+      if (typingTimer) clearInterval(typingTimer);
+      if (typingAutoHideTimer) clearTimeout(typingAutoHideTimer);
       typingDots.textContent = ".";
     }
   }
@@ -120,22 +86,20 @@ document.addEventListener("DOMContentLoaded", function () {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log("[chatbot] WS received:", data);
+        console.log("[chatbot] WS message received:", data);
 
-        if (data.type === "typing" && data.sender === "staff") {
+        if (data.type === "typing") {
           showTyping(true);
           return;
         }
-
-        if (data.type === "stop_typing" && data.sender === "staff") {
+        if (data.type === "stop_typing") {
           showTyping(false);
           return;
         }
 
-        appendMessage(data.sender || "System", data.text || "", data.sender || "system");
-        showTyping(false); // Hide typing indicator on new message
-      } catch (err) {
-        console.warn("Failed to parse WS message", err);
+        appendMessage(data.sender || "system", data.text || "", data.sender || "system");
+      } catch {
+        appendMessage("System", "⚠️ Invalid server message", "system");
       }
     };
 
@@ -145,12 +109,13 @@ document.addEventListener("DOMContentLoaded", function () {
     };
   }
 
-  // Typing detection
+  // ========================
+  // Typing events
+  // ========================
   msgInput.addEventListener("input", () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "typing" }));
     }
-
     clearTimeout(typingTimeout);
     typingTimeout = setTimeout(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -159,7 +124,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }, 1500);
   });
 
+  // ========================
   // Send message
+  // ========================
   sendBtn.addEventListener("click", () => {
     const text = msgInput.value.trim();
     if (!text) return;
@@ -170,9 +137,7 @@ document.addEventListener("DOMContentLoaded", function () {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId, channel: "webchat", text }),
-    }).then((res) => {
-      console.log("[chatbot] Message sent:", res.status);
-    });
+    }).then((res) => console.log("[chatbot] POST /webchat response:", res.status));
 
     msgInput.value = "";
   });
@@ -181,9 +146,13 @@ document.addEventListener("DOMContentLoaded", function () {
     if (e.key === "Enter") sendBtn.click();
   });
 
+  // ========================
+  // Toggle
+  // ========================
   toggleBtn.addEventListener("click", () => {
     chatBox.style.display = chatBox.style.display === "none" ? "flex" : "none";
   });
 
+  // Start WS
   connectWS();
 });
