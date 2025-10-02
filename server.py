@@ -12,6 +12,8 @@ import os, logging, datetime, sqlite3, asyncio
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, Dict, Set
+DEBUG_ADMIN_PUSH = False
+import json
 
 # ========================
 # Load env & App
@@ -208,13 +210,14 @@ ws_manager = WSManager()
 # Routes
 # ========================
 @app.on_event("startup")
-def on_startup():
+async def startup_tasks():
     db_init()
-    logging.info("DB initialized.")
+    logging.info("DB initialized and escalation loop starting.")
     logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
                  f"Token={'set' if AUTH_TOKEN else 'missing'}, "
                  f"Number={TWILIO_NUMBER}, "
                  f"Client={'ready' if twilio_client else 'NONE'}")
+    asyncio.create_task(escalation_loop())
 
 @app.get("/health")
 def health():
@@ -357,40 +360,114 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
     await ws_manager.connect(user_id, "webchat", websocket)
     try:
         while True:
-            await asyncio.sleep(30)
+            msg = await websocket.receive_text()
+            try:
+                data = json.loads(msg)
+            except Exception:
+                continue  # ignore invalid messages
+
+            ev_type = (data.get("type") or "").lower()
+            if ev_type in ("typing", "stop_typing"):
+                await push_with_admin(
+                    user_id,
+                    "webchat",
+                    {
+                        "sender": "user",
+                        "type": ev_type,
+                        "text": "",
+                        "ts": datetime.datetime.utcnow().isoformat() + "Z",
+                    },
+                )
     except WebSocketDisconnect:
+        pass
+    finally:
         ws_manager.disconnect(user_id, "webchat", websocket)
 
 # WebSocket for admin dashboard (broadcast)
 admin_connections: Set[WebSocket] = set()
 
-@app.websocket("/ws/admin-dashboard")
+@app.websocket("/admin-ws")
 async def ws_admin(websocket: WebSocket):
     await websocket.accept()
     admin_connections.add(websocket)
+    logging.warning(">>> ENTERED NEW ws_admin HANDLER <<<")
+    logging.info("[admin] dashboard connected. total=%s", len(admin_connections))
+
+    try:
+        with db() as conn:
+            c = conn.cursor()
+            c.execute("SELECT user_id, channel FROM conversations WHERE open=1 ORDER BY updated_at DESC")
+            convos = c.fetchall()
+        for row in convos:
+            convo_data = get_messages(row["user_id"], row["channel"])
+            enriched = {
+                "user_id": row["user_id"],
+                "channel": row["channel"],
+                **convo_data
+            }
+            try:
+                await websocket.send_json({"type": "snapshot", "data": enriched})
+            except Exception as e:
+                logging.exception("Failed to send snapshot to admin", exc_info=e)
+    except Exception as e:
+        logging.exception("Replay on connect failed", exc_info=e)
+
     try:
         while True:
-            await asyncio.sleep(30)
+            try:
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=20)
+                logging.debug("[admin] received frame: %s", msg[:120])
+
+                # Handle typing messages sent by admin dashboard
+                try:
+                    data = json.loads(msg)
+                except Exception as e:
+                    logging.warning("Failed to parse admin WS message: %s", msg)
+                    continue
+
+                ev_type = (data.get("type") or "").lower()
+                user_id = data.get("user_id")
+                channel = data.get("channel", "webchat")
+
+                if ev_type in ("typing", "stop_typing") and user_id:
+                    await ws_manager.push(user_id, channel, {
+                        "type": ev_type,
+                        "sender": "staff",
+                        "ts": datetime.datetime.utcnow().isoformat() + "Z"
+                    })
+
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
+        pass
+    finally:
         if websocket in admin_connections:
             admin_connections.remove(websocket)
+        logging.info("[admin] dashboard disconnected. total=%s", len(admin_connections))
 
 # Helper: push to both user channel + admin dashboard
 DEBUG_ADMIN_PUSH = True  # set False in production if logs too noisy
 
 async def push_with_admin(user_id: str, channel: str, payload: dict):
     if DEBUG_ADMIN_PUSH:
-        logging.info(f"[DEBUG] push_with_admin → user={user_id}, channel={channel}, payload={payload}")
+        logging.info("[DEBUG] push_with_admin -> user=%s, channel=%s, payload=%s", user_id, channel, payload)
+        logging.info("[DEBUG] active admin connections = %d", len(admin_connections))
 
-    # Send staff/system replies back to the visitor,
-    # but don't echo their own "user" messages
     if payload.get("sender") != "user":
         await ws_manager.push(user_id, channel, payload)
 
-    # Always push to admin dashboards
+    enriched = {
+        "user_id": user_id,
+        "channel": channel,
+        "sender": payload.get("sender", ""),
+        "text": payload.get("text", ""),
+        "type": payload.get("type", ""),
+        "ts": payload.get("ts") or datetime.datetime.utcnow().isoformat() + "Z",
+    }
+
     for ws in list(admin_connections):
         try:
-            await ws.send_json({"user_id": user_id, "channel": channel, **payload})
+            await ws.send_json(enriched)
         except Exception:
             admin_connections.remove(ws)
 
@@ -489,10 +566,3 @@ async def escalation_loop():
         except Exception as e:
             logging.exception("Error in escalation_loop", exc_info=e)
         await asyncio.sleep(30)
-
-
-@app.on_event("startup")
-async def startup_tasks():
-    db_init()
-    logging.info("DB initialized and escalation loop starting.")
-    asyncio.create_task(escalation_loop())

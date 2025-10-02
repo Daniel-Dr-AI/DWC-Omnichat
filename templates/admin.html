@@ -1,4 +1,5 @@
-﻿<!DOCTYPE html>
+﻿<link rel="icon" href="data:,">
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -45,6 +46,9 @@
 <div id="chatbox" style="display:none;">
   <h2>Conversation: <span id="cid"></span> <small id="cchan"></small></h2>
   <div class="messages" id="msgs"></div>
+  <div id="typingIndicator" style="display:none; margin:6px 0; color:#6b7280; font-style:italic;">
+    User is typing<span id="typingDots">.</span>
+  </div>
   <input id="reply" style="width:70%;padding:8px;" placeholder="Type reply to user...">
   <button onclick="send()" style="padding:8px 12px;">Send</button>
   <div id="actions">
@@ -195,9 +199,10 @@ async function closeConvo(){
 
 // WebSocket for real-time updates
 let wsAdmin;
-function connectAdminWS(){
+function connectAdminWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  wsAdmin = new WebSocket(`${proto}://${location.host}/ws/admin-dashboard`);
+    wsAdmin = new WebSocket(`${proto}://${location.host}/admin-ws`);
+
   wsAdmin.onopen = () => {
     console.log("Admin WS connected");
     // Initial load so the dashboard isn’t blank on first paint
@@ -205,46 +210,124 @@ function connectAdminWS(){
     loadEscalated();
     loadHistory();
   };
+
   wsAdmin.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      // Refresh lists on any server event
-      loadConvos();
-      loadEscalated();
-      loadHistory();
-      // Append live message if current convo is open
-      if (current && data.sender && data.text && data.ts && data.user_id === current.user_id) {
-        const msgs = document.getElementById('msgs');
-        const row = document.createElement('div');
-        row.className = 'msg ' + data.sender;
-        const meta = document.createElement('div');
-        meta.className = 'meta';
-        const ts = new Date(data.ts).toLocaleString();
-        meta.textContent = `${data.sender} — ${ts}`;
-        const bubble = document.createElement('div');
-        bubble.className = 'bubble';
-        bubble.textContent = data.text;
-        row.appendChild(meta);
-        row.appendChild(bubble);
-        msgs.appendChild(row);
-        msgs.scrollTop = msgs.scrollHeight;
+  try {
+    const data = JSON.parse(event.data);
+    console.log("[admin] WS message received:", data);
+
+    // Handle snapshot (full conversation)
+    if (data.type === "snapshot") {
+      const convo = data.data;
+      if (!current) {
+        openConvo(convo.channel, convo.user_id);
       }
-    } catch(e){
-      console.error("Bad WS message", e);
+      return;
     }
+
+    // Handle enriched message push (sender/text/type/ts)
+    if (
+      current &&
+      current.user_id === data.user_id &&
+      current.channel === data.channel
+    ) {
+      if (data.type === "typing") {
+        showTyping(true);
+      } else if (data.type === "stop_typing") {
+        showTyping(false);
+      } else {
+        appendIncomingMessage(data);
+      }
+    }
+
+    // Auto-open convo if none is selected
+    if (!current) {
+      openConvo(data.channel, data.user_id);
+    }
+
+    // Refresh conversation lists
+    loadConvos();
+    loadEscalated();
+    loadHistory();
+  } catch (err) {
+    console.error("Failed to parse WS message", err, event.data);
+  }
   };
-  wsAdmin.onerror = (e) => {
-    console.error("Admin WS error", e);
-  };
-  wsAdmin.onclose = () => {
-    console.log("Admin WS closed, retrying...");
-    setTimeout(connectAdminWS, 3000);
-  };
-}
+} 
 connectAdminWS();
+
 // Fallback: if WS is slow to connect, still show current state
 loadConvos();
 loadHistory();
+// --- Typing indicator helpers ---
+let typingUiTimer = null, typingAutoHideTimer = null;
+function showTyping(show){
+  const ind=document.getElementById('typingIndicator');
+  const dots=document.getElementById('typingDots');
+  if(!ind||!dots) return;
+  if(show){
+    ind.style.display='block';
+    if(typingUiTimer) clearInterval(typingUiTimer);
+    let n=1;
+    typingUiTimer=setInterval(()=>{
+      n=(n%3)+1;
+      dots.textContent='.'.repeat(n);
+    },500);
+    if(typingAutoHideTimer) clearTimeout(typingAutoHideTimer);
+    typingAutoHideTimer=setTimeout(()=>showTyping(false),3000);
+  } else {
+    ind.style.display='none';
+    if(typingUiTimer){ clearInterval(typingUiTimer); typingUiTimer=null; }
+    if(typingAutoHideTimer){ clearTimeout(typingAutoHideTimer); typingAutoHideTimer=null; }
+  }
+}
+// --- Staff typing events (send to visitor) ---
+const replyInput = document.getElementById('reply');
+let staffTypingTimeout;
+replyInput.addEventListener("input", () => {
+  if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
+    wsAdmin.send(JSON.stringify({
+      type: "typing",
+      user_id: current.user_id,
+      channel: current.channel
+    }));
+  }
+  clearTimeout(staffTypingTimeout);
+  staffTypingTimeout = setTimeout(() => {
+    if (wsAdmin && wsAdmin.readyState === WebSocket.OPEN && current) {
+      wsAdmin.send(JSON.stringify({
+        type: "stop_typing",
+        user_id: current.user_id,
+        channel: current.channel
+      }));
+    }
+  }, 1500);
+});
+// helper to append incoming messages to the current chat window
+function appendIncomingMessage(data) {
+  const msgs = document.getElementById("msgs");
+  if (!msgs) return;
+
+  const row = document.createElement("div");
+  row.className = "msg " + (data.sender || "system");
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const ts = data.ts ? new Date(data.ts).toLocaleString() : "";
+  meta.textContent = `${data.sender || "system"}${ts ? " — " + ts : ""}`;
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = data.text || "";
+
+  row.appendChild(meta);
+  row.appendChild(bubble);
+  msgs.appendChild(row);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  // hide typing indicator once message lands
+  showTyping(false);
+}
 </script>
 </body>
 </html>
