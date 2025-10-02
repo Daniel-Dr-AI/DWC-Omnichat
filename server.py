@@ -352,6 +352,14 @@ def admin_escalated():
         rows = c.fetchall()
     return {"conversations": [dict(r) for r in rows]}
 
+@app.get("/admin/api/followups")
+def admin_followups():
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM followups ORDER BY ts DESC LIMIT 200")
+        rows = c.fetchall()
+    return {"followups": [dict(r) for r in rows]}
+
 @app.get("/admin/api/messages/{channel}/{user_id}")
 def admin_messages(channel: str, user_id: str):
     return get_messages(user_id, channel)
