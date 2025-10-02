@@ -101,6 +101,21 @@ def db_init():
         )
         """)
 
+        # ✅ Add this for migration from followups
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            channel TEXT,
+            name TEXT,
+            contact TEXT,
+            message TEXT,
+            ts TEXT,
+            migrated_at TEXT
+        )
+        """)
+
+
         # Backward compatibility: add new columns if missing
         try:
             c.execute("ALTER TABLE conversations ADD COLUMN patience_sent INTEGER DEFAULT 0")
@@ -289,26 +304,23 @@ def admin_followups():
 def clear_followup(fid: int):
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT user_id, channel, name, contact, message, created_at FROM followups WHERE id=?", (fid,))
+        # Step 1: fetch followup row
+        c.execute("SELECT id, user_id, channel, name, contact, message, ts FROM followups WHERE id=?", (fid,))
         row = c.fetchone()
-        if row:
-            # Insert into history as a closed conversation + message
-            user_id, channel, name, contact, message, created_at = row
+        if not row:
+            raise HTTPException(status_code=404, detail="Followup not found")
 
-            # Add message into messages log
-            summary_text = f"[Follow-up closed] Name: {name}, Contact: {contact}, Message: {message}"
-            ts = datetime.datetime.utcnow().isoformat() + "Z"
-            c.execute("INSERT INTO messages (user_id, channel, sender, text, ts) VALUES (?,?,?,?,?)",
-                      (user_id, channel, "system", summary_text, ts))
+        # Step 2: insert into history (keeping fields consistent)
+        c.execute("""
+            INSERT INTO history (user_id, channel, name, contact, message, ts, migrated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (row["user_id"], row["channel"], row["name"], row["contact"], row["message"], row["ts"], datetime.datetime.utcnow().isoformat()+"Z"))
 
-            # Ensure conversation is marked closed
-            c.execute("UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
-                      (ts, user_id, channel))
-
-            # Delete follow-up entry
-            c.execute("DELETE FROM followups WHERE id=?", (fid,))
+        # Step 3: delete from followups
+        c.execute("DELETE FROM followups WHERE id=?", (fid,))
         conn.commit()
-    return {"status": "migrated_to_history"}
+
+    return {"status": "migrated", "id": fid}
 @app.get("/admin/api/escalated")
 def admin_escalated():
     with db() as conn:
