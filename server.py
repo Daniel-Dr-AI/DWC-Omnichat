@@ -62,7 +62,7 @@ if ACCOUNT_SID and AUTH_TOKEN:
     twilio_client = TwilioClient(ACCOUNT_SID, AUTH_TOKEN)
     twilio_validator = RequestValidator(AUTH_TOKEN)
 
-DB_PATH = "handoff.sqlite"
+DB_PATH = "/data/handoff.sqlite"
 SHIFT_ROTA = [{"name": "Default"}]  # stub for config
 BACKUP_NUMBER = os.getenv("BACKUP_NUMBER")
 ESCALATE_AFTER_SECONDS = 120
@@ -722,3 +722,12 @@ async def escalation_loop():
         except Exception as e:
             logging.exception("Error in escalation_loop", exc_info=e)
         await asyncio.sleep(30)
+        from fastapi import UploadFile, File
+import shutil
+
+@app.post("/__upload_db")
+async def upload_db(file: UploadFile = File(...)):
+    out_path = "/data/handoff.sqlite"
+    with open(out_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return {"status": "uploaded", "path": out_path}
