@@ -3,6 +3,7 @@ from fastapi.responses import Response, JSONResponse, PlainTextResponse, HTMLRes
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi import File
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
