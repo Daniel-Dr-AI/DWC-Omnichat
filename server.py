@@ -723,12 +723,3 @@ async def escalation_loop():
         except Exception as e:
             logging.exception("Error in escalation_loop", exc_info=e)
         await asyncio.sleep(30)
-        from fastapi import UploadFile, File
-import shutil
-
-@app.post("/__upload_db")
-async def upload_db(file: UploadFile = File(...)):
-    out_path = "/data/handoff.sqlite"
-    with open(out_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    return {"status": "uploaded", "path": out_path}
