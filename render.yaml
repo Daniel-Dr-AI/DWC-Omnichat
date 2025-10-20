@@ -1,0 +1,27 @@
+﻿services:
+  - type: web
+    name: dwc-omnichat
+    env: python
+    plan: free   # change to "starter" or above for 24/7 uptime
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_NUMBER
+        sync: false
+      - key: FB_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: FB_VERIFY_TOKEN
+        sync: false
+      - key: PUBLIC_BASE_URL
+        value: "https://dwc-omnichat.onrender.com"
+      - key: AUTO_CLOSE_MINUTES
+        value: "30"
+      - key: ESCALATE_AFTER_SECONDS
+        value: "300"
+
