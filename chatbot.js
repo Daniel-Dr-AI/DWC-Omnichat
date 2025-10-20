@@ -30,8 +30,10 @@ document.addEventListener("DOMContentLoaded", function () {
   const typingIndicator = document.getElementById("typingIndicator");
   const typingDots = document.getElementById("typingDots");
 
-  // 🔑 Render backend (adjust if self-hosted)
-  const BASE_URL = "https://dwc-omnichat.onrender.com";
+  // 🔑 Backend URL (configurable via window object or defaults to production)
+  // For local development on WordPress: window.DWC_CHAT_BACKEND = "http://localhost:8000"
+  // For production: window.DWC_CHAT_BACKEND = "https://dwc-omnichat.onrender.com"
+  const BASE_URL = window.DWC_CHAT_BACKEND || "https://dwc-omnichat.onrender.com";
 
   // Persistent visitor ID
   let userId = localStorage.getItem("dwc_user_id");
