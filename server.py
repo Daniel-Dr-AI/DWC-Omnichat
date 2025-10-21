@@ -143,6 +143,38 @@ def db():
 def db_init():
     with db() as conn:
         c = conn.cursor()
+
+        # Create tenants table first (foreign key dependency for users)
+        c.execute("""CREATE TABLE IF NOT EXISTS tenants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )""")
+
+        # Create users table for authentication
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL DEFAULT 1,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'staff',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        )""")
+
+        # Create events table for audit logging
+        c.execute("""CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            tenant_id INTEGER,
+            type TEXT NOT NULL,
+            payload TEXT,
+            ts TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        )""")
+
         c.execute("""CREATE TABLE IF NOT EXISTS conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, channel TEXT,
@@ -192,6 +224,49 @@ def db_init():
             pass
 
         conn.commit()
+
+
+def seed_admin_user():
+    """
+    Create default admin user and tenant if they don't exist.
+    This runs on every startup but only creates the user once.
+    """
+    with db() as conn:
+        c = conn.cursor()
+
+        # Check if default tenant exists
+        c.execute("SELECT id FROM tenants WHERE id = 1")
+        if not c.fetchone():
+            c.execute(
+                "INSERT INTO tenants (id, name, created_at) VALUES (?, ?, datetime('now'))",
+                (1, "Default Tenant")
+            )
+            logging.info("✅ Created default tenant")
+
+        # Check if admin user exists
+        c.execute("SELECT id FROM users WHERE email = ?", ("admin@dwc.com",))
+        if not c.fetchone():
+            # Import password hashing from auth module
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+            # Default admin password - CHANGE THIS IMMEDIATELY AFTER FIRST LOGIN
+            default_password = "admin123"
+            password_hash = pwd_context.hash(default_password)
+
+            c.execute(
+                """INSERT INTO users (tenant_id, email, name, password_hash, role, created_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                (1, "admin@dwc.com", "Default Admin", password_hash, "admin")
+            )
+            conn.commit()
+            logging.info("✅ Created default admin user")
+            logging.info("   📧 Email: admin@dwc.com")
+            logging.info("   🔑 Password: admin123")
+            logging.info("   ⚠️  PLEASE CHANGE THIS PASSWORD IMMEDIATELY!")
+        else:
+            logging.info("ℹ️  Admin user already exists")
+
 
 # ========================
 # Models
@@ -352,7 +427,8 @@ async def get_websocket_token(
 @app.on_event("startup")
 async def startup_tasks():
     db_init()
-    logging.info("DB initialized and escalation loop starting.")
+    seed_admin_user()
+    logging.info("DB initialized, admin user seeded, and escalation loop starting.")
     logging.info(f"Env check: SID={'set' if ACCOUNT_SID else 'missing'}, "
                  f"Token={'set' if AUTH_TOKEN else 'missing'}, "
                  f"Number={TWILIO_NUMBER}, "
