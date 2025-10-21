@@ -64,7 +64,13 @@ DB_PATH = str(Path(__file__).parent / "handoff.sqlite")
 app.include_router(auth_router)
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
-allowed_origins = ["*"] if not FRONTEND_ORIGIN else [FRONTEND_ORIGIN, "https://dwc-omnichat.onrender.com"]
+# Allow both production Render URL and local development
+allowed_origins = ["*"] if not FRONTEND_ORIGIN else [
+    FRONTEND_ORIGIN,
+    "https://dwc-omnichat.onrender.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+]
 
 app.add_middleware(
     CORSMiddleware,
