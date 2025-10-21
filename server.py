@@ -26,7 +26,10 @@ load_dotenv()
 # Use Render's persistent disk if available, otherwise local file
 if os.path.exists("/data"):
     DB_PATH = "/data/handoff.sqlite"
-else:from fastapi.openapi.utils import get_openapi
+else:
+    DB_PATH = str(Path(__file__).parent / "handoff.sqlite")
+
+from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordBearer
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -59,8 +62,6 @@ def custom_openapi():
 
 app = FastAPI(title="DWC Omnichat")
 app.openapi = custom_openapi
-
-DB_PATH = str(Path(__file__).parent / "handoff.sqlite")
 
 app.include_router(auth_router)
 
@@ -350,6 +351,18 @@ async def startup_tasks():
                  f"Number={TWILIO_NUMBER}, "
                  f"Client={'ready' if twilio_client else 'NONE'}")
     asyncio.create_task(escalation_loop())
+
+@app.get("/")
+def root():
+    """Root endpoint - API information"""
+    return {
+        "name": "DWC Omnichat API",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "admin_login": "/api/v1/auth/login"
+    }
 
 @app.get("/health")
 def health():
