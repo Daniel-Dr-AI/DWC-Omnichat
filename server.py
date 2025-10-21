@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, WebSocketException, HTTPException, UploadFile, File, Form, Depends, Query, status
 from fastapi.responses import Response, JSONResponse, PlainTextResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,10 +10,11 @@ from twilio.rest import Client as TwilioClient
 from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
 import os, logging, datetime, sqlite3, asyncio
-from auth import router as auth_router, require_role, TokenData
+from auth import router as auth_router, require_role, TokenData, SECRET_KEY, ALGORITHM
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, Dict, Set
+from jose import jwt
 DEBUG_ADMIN_PUSH = False
 import json
 
@@ -65,12 +66,17 @@ app.include_router(auth_router)
 
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
 # Allow both production Render URL and local development
-allowed_origins = ["*"] if not FRONTEND_ORIGIN else [
-    FRONTEND_ORIGIN,
-    "https://dwc-omnichat.onrender.com",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173"
-]
+if not FRONTEND_ORIGIN:
+    logging.warning("⚠️  FRONTEND_ORIGIN not set in environment - using wildcard CORS (insecure for production)")
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [
+        FRONTEND_ORIGIN,
+        "https://dwc-omnichat.onrender.com",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ]
+    logging.info(f"✅ CORS configured for origins: {', '.join(allowed_origins)}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -288,6 +294,49 @@ class WSManager:
                 self.disconnect(user_id, channel, ws)
 
 ws_manager = WSManager()
+
+# ========================
+# WebSocket Authentication
+# ========================
+async def get_websocket_token(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+) -> TokenData:
+    """
+    Validate JWT token for WebSocket connections.
+    Token should be passed as a query parameter: ws://host/admin-ws?token=<jwt>
+    """
+    if token is None:
+        logging.warning("[WebSocket] Connection attempt without token")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+
+    try:
+        # Decode and validate JWT token
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_data = TokenData(**payload)
+
+        # Verify role is admin or staff
+        if token_data.role not in ["admin", "staff"]:
+            logging.warning(f"[WebSocket] Unauthorized role attempt: {token_data.role} from {token_data.email}")
+            await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+            raise WebSocketException(code=status.WS_1003_UNSUPPORTED_DATA)
+
+        logging.info(f"[WebSocket] Authenticated: {token_data.email} ({token_data.role})")
+        return token_data
+
+    except jwt.ExpiredSignatureError:
+        logging.warning("[WebSocket] Expired token")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    except jwt.JWTError as e:
+        logging.warning(f"[WebSocket] Invalid token: {e}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    except Exception as e:
+        logging.error(f"[WebSocket] Token validation error: {e}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
 # ========================
 # Routes
@@ -591,14 +640,25 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
         ws_manager.disconnect(user_id, "webchat", websocket)
 
 # WebSocket for admin dashboard (broadcast)
-admin_connections: Set[WebSocket] = set()
+# Store connections with user metadata for authentication tracking
+admin_connections: Set[Dict] = set()
 
 @app.websocket("/admin-ws")
-async def ws_admin(websocket: WebSocket):
+async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket_token)):
     await websocket.accept()
-    admin_connections.add(websocket)
-    logging.warning(">>> ENTERED NEW ws_admin HANDLER <<<")
-    logging.info("[admin] dashboard connected. total=%s", len(admin_connections))
+
+    # Store connection with user metadata
+    connection_info = {
+        "ws": websocket,
+        "user_id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "tenant_id": user.tenant_id,
+        "connected_at": datetime.datetime.utcnow().isoformat() + "Z"
+    }
+    admin_connections.add(connection_info)
+
+    logging.info(f"[admin] Authenticated dashboard connected: {user.email} ({user.role}), total={len(admin_connections)}")
 
     try:
         with db() as conn:
@@ -648,9 +708,9 @@ async def ws_admin(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        if websocket in admin_connections:
-            admin_connections.remove(websocket)
-        logging.info("[admin] dashboard disconnected. total=%s", len(admin_connections))
+        # Remove connection by finding the matching dict entry
+        admin_connections.discard(connection_info)
+        logging.info(f"[admin] Dashboard disconnected: {user.email}, total={len(admin_connections)}")
 
 # -------------------------------------------------------------
 # Simple test endpoint to verify React ↔ FastAPI proxy
@@ -679,11 +739,14 @@ async def push_with_admin(user_id: str, channel: str, payload: dict):
         "ts": payload.get("ts") or datetime.datetime.utcnow().isoformat() + "Z",
     }
 
-    for ws in list(admin_connections):
+    # Broadcast to all authenticated admin connections
+    for connection in list(admin_connections):
         try:
+            ws = connection["ws"]
             await ws.send_json(enriched)
-        except Exception:
-            admin_connections.remove(ws)
+        except Exception as e:
+            logging.warning(f"[push_with_admin] Failed to send to {connection.get('email', 'unknown')}: {e}")
+            admin_connections.discard(connection)
 
 # ========================
 # Escalation Loop
