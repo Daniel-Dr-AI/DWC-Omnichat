@@ -4,22 +4,44 @@ from pydantic import BaseModel
 from typing import Optional
 from jose import jwt
 from datetime import datetime, timedelta
+from passlib.context import CryptContext
+from pathlib import Path
 import sqlite3
-import os  # ✅ REQUIRED for reading environment variables
+import os
 import json
+import logging
 
 from dotenv import load_dotenv
 load_dotenv()
 
-print("🔐 JWT_SECRET =", os.getenv("JWT_SECRET"))
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-SECRET_KEY = os.getenv("JWT_SECRET", "secret-key")
+# Validate JWT_SECRET
+SECRET_KEY = os.getenv("JWT_SECRET")
+if not SECRET_KEY or SECRET_KEY == "secret-key":
+    logger.warning("⚠️  WARNING: JWT_SECRET not properly configured, using insecure default!")
+    SECRET_KEY = "secret-key"
+else:
+    logger.info("✅ JWT_SECRET configured")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 3
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+# Initialize password context at module level (more efficient)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Database path helper - matches server.py logic
+def get_db_path():
+    """Get the correct database path based on environment"""
+    if os.path.exists("/data"):
+        return "/data/handoff.sqlite"
+    return str(Path(__file__).parent / "handoff.sqlite")
 
 
 class Token(BaseModel):
@@ -52,27 +74,36 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 
 def verify_password(plain_password, hashed_password):
-    from passlib.context import CryptContext
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    """Verify a plain password against a hashed password"""
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_user_by_email(email: str):
-    conn = sqlite3.connect("handoff.sqlite")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, name, role, password_hash, tenant_id FROM users WHERE email = ?", (email,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {
-            "id": row[0],
-            "email": row[1],
-            "name": row[2],
-            "role": row[3],
-            "password_hash": row[4],
-            "tenant_id": row[5],
-        }
-    return None
+    """Retrieve user from database by email address"""
+    try:
+        db_path = get_db_path()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, email, name, role, password_hash, tenant_id FROM users WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "id": row[0],
+                "email": row[1],
+                "name": row[2],
+                "role": row[3],
+                "password_hash": row[4],
+                "tenant_id": row[5],
+            }
+        return None
+    except sqlite3.OperationalError as e:
+        logger.error(f"Database error in get_user_by_email: {e}")
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in get_user_by_email: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
@@ -92,35 +123,55 @@ def require_role(required_roles: list):
 
 
 def log_event(user_id: int, tenant_id: int, type: str, payload: dict):
-    conn = sqlite3.connect("handoff.sqlite")
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO events (user_id, tenant_id, type, payload, ts) VALUES (?, ?, ?, ?, datetime('now'))",
-        (user_id, tenant_id, type, json.dumps(payload))
-    )
-    conn.commit()
-    conn.close()
+    """Log an event to the database"""
+    try:
+        db_path = get_db_path()
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO events (user_id, tenant_id, type, payload, ts) VALUES (?, ?, ?, ?, datetime('now'))",
+            (user_id, tenant_id, type, json.dumps(payload))
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to log event: {e}")
+        # Don't raise - logging failure shouldn't break the main flow
 
 
 @router.post("/login", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = get_user_by_email(form_data.username)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    """Authenticate user and return JWT access token"""
+    try:
+        logger.info(f"Login attempt for user: {form_data.username}")
 
-    if not verify_password(form_data.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        user = get_user_by_email(form_data.username)
+        if not user:
+            logger.warning(f"Login failed: user not found - {form_data.username}")
+            raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token_data = {
-        "id": user["id"],
-        "email": user["email"],
-        "name": user["name"],
-        "role": user["role"],
-        "tenant_id": user["tenant_id"]
-    }
+        if not verify_password(form_data.password, user["password_hash"]):
+            logger.warning(f"Login failed: invalid password - {form_data.username}")
+            raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    access_token = create_access_token(token_data)
-    return {"access_token": access_token, "token_type": "bearer"}
+        token_data = {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "role": user["role"],
+            "tenant_id": user["tenant_id"]
+        }
+
+        access_token = create_access_token(token_data)
+        logger.info(f"Login successful: {user['email']} ({user['role']})")
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (401 from get_user_by_email or password verification)
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during login: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error during login")
 
 
 @router.get("/me", response_model=UserOut)

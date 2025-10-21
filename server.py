@@ -92,6 +92,13 @@ if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# Mount React Admin Dashboard
+if Path("admin-frontend/dist").exists():
+    app.mount("/admin-app", StaticFiles(directory="admin-frontend/dist", html=True), name="admin-app")
+    logging.info("✅ Admin dashboard mounted at /admin-app")
+else:
+    logging.warning("⚠️  Admin frontend dist directory not found - run 'npm run build' in admin-frontend/")
+
 # Logging
 log_handler = RotatingFileHandler("chat.log", maxBytes=1_000_000, backupCount=5)
 console_handler = logging.StreamHandler()  # ensure logs also go to stdout for Render
