@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist  # Commented out - committing dist for Render deployment
 dist-ssr
 *.local
 
