@@ -732,7 +732,7 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
 # WebSocket for admin dashboard (broadcast)
 # Store connections with user metadata for authentication tracking
 # Using List instead of Set because connection dicts are unhashable
-admin_connections: List[Dict] = []
+admin_connections: list[dict] = []
 admin_connections_lock = asyncio.Lock()
 
 @app.websocket("/admin-ws")
