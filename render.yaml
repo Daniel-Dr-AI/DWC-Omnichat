@@ -3,7 +3,7 @@
     name: dwc-omnichat
     env: python
     plan: free   # change to "starter" or above for 24/7 uptime
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs && cd admin-frontend && npm install && npm run build && cd .. && pip install -r requirements.txt"
     startCommand: "uvicorn server:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION

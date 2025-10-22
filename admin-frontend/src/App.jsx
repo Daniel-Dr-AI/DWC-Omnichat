@@ -6,7 +6,7 @@ import RequireAuth from "./components/auth/RequireAuth";
 
 const App = () => {
   return (
-    <Router>
+    <Router basename="/admin-app">
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route

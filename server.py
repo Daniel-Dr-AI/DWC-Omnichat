@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, WebSocketE
 from fastapi.responses import Response, JSONResponse, PlainTextResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi import File
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
@@ -87,10 +86,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static + Templates
+# Static files
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 # Mount React Admin Dashboard
 if Path("admin-frontend/dist").exists():
@@ -123,11 +121,6 @@ if ACCOUNT_SID and AUTH_TOKEN:
     twilio_client = TwilioClient(ACCOUNT_SID, AUTH_TOKEN)
     twilio_validator = RequestValidator(AUTH_TOKEN)
 
-# Use Render's persistent disk if available, otherwise local file
-if os.path.exists("/data"):
-    DB_PATH = "/data/handoff.sqlite"
-else:
-    DB_PATH = str(Path(__file__).parent / "handoff.sqlite")
 SHIFT_ROTA = [{"name": "Default"}]  # stub for config
 BACKUP_NUMBER = os.getenv("BACKUP_NUMBER")
 ESCALATE_AFTER_SECONDS = 120
@@ -451,10 +444,11 @@ def root():
 def health():
     return {"status": "running", "db": str(DB_PATH), "shifts": [s["name"] for s in SHIFT_ROTA]}
 
-# Admin dashboard
-@app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(request: Request):
-    return templates.TemplateResponse("admin.html", {"request": request})
+# Admin dashboard - redirect legacy route to new React dashboard
+@app.get("/admin")
+def admin_dashboard_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/admin-app/login", status_code=301)
 
 # Admin API
 @app.get("/admin/api/convos", dependencies=[Depends(require_role(["admin", "staff"]))])
@@ -737,7 +731,9 @@ async def ws_endpoint(websocket: WebSocket, user_id: str):
 
 # WebSocket for admin dashboard (broadcast)
 # Store connections with user metadata for authentication tracking
-admin_connections: Set[Dict] = set()
+# Using List instead of Set because connection dicts are unhashable
+admin_connections: List[Dict] = []
+admin_connections_lock = asyncio.Lock()
 
 @app.websocket("/admin-ws")
 async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket_token)):
@@ -752,7 +748,8 @@ async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket
         "tenant_id": user.tenant_id,
         "connected_at": datetime.datetime.utcnow().isoformat() + "Z"
     }
-    admin_connections.add(connection_info)
+    async with admin_connections_lock:
+        admin_connections.append(connection_info)
 
     logging.info(f"[admin] Authenticated dashboard connected: {user.email} ({user.role}), total={len(admin_connections)}")
 
@@ -804,8 +801,12 @@ async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket
     except WebSocketDisconnect:
         pass
     finally:
-        # Remove connection by finding the matching dict entry
-        admin_connections.discard(connection_info)
+        # Remove connection from list with lock
+        async with admin_connections_lock:
+            try:
+                admin_connections.remove(connection_info)
+            except ValueError:
+                pass  # Connection already removed
         logging.info(f"[admin] Dashboard disconnected: {user.email}, total={len(admin_connections)}")
 
 # -------------------------------------------------------------
@@ -836,13 +837,27 @@ async def push_with_admin(user_id: str, channel: str, payload: dict):
     }
 
     # Broadcast to all authenticated admin connections
-    for connection in list(admin_connections):
+    # Create snapshot of connections to avoid lock during send
+    async with admin_connections_lock:
+        connections_snapshot = list(admin_connections)
+    
+    failed_connections = []
+    for connection in connections_snapshot:
         try:
             ws = connection["ws"]
             await ws.send_json(enriched)
         except Exception as e:
             logging.warning(f"[push_with_admin] Failed to send to {connection.get('email', 'unknown')}: {e}")
-            admin_connections.discard(connection)
+            failed_connections.append(connection)
+    
+    # Remove failed connections
+    if failed_connections:
+        async with admin_connections_lock:
+            for conn in failed_connections:
+                try:
+                    admin_connections.remove(conn)
+                except ValueError:
+                    pass  # Already removed
 
 # ========================
 # Escalation Loop
