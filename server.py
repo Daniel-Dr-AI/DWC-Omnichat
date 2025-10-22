@@ -381,7 +381,13 @@ async def get_websocket_token(
     """
     Validate JWT token for WebSocket connections.
     Token should be passed as a query parameter: ws://host/admin-ws?token=<jwt>
+
+    IMPORTANT: This function accepts the websocket connection before validation
+    to allow proper error handling and connection closure.
     """
+    # Accept the connection first (required before we can close it)
+    await websocket.accept()
+
     if token is None:
         logging.warning("[WebSocket] Connection attempt without token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -737,8 +743,7 @@ admin_connections_lock = asyncio.Lock()
 
 @app.websocket("/admin-ws")
 async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket_token)):
-    await websocket.accept()
-
+    # WebSocket already accepted in get_websocket_token dependency
     # Store connection with user metadata
     connection_info = {
         "ws": websocket,
