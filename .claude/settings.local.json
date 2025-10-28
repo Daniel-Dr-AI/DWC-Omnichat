@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m pip list)",
+      "Bash(python3 server.py)",
+      "Bash(pip3 install fastapi uvicorn websockets python-dotenv)",
+      "Bash(.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s -X POST http://localhost:8000/webchat -H \"Content-Type: application/json\" -d '{\"\"user_id\"\": \"\"test-user-ws-123\"\", \"\"channel\"\": \"\"webchat\"\", \"\"text\"\": \"\"Test message for WebSocket\"\"}')",
+      "Bash(npm run dev)",
+      "Bash(python3 server_mount_admin.py)",
+      "Bash(git add auth.py server.py render.yaml)",
+      "Bash(npm run dev:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

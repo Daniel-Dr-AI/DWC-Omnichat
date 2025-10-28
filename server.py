@@ -74,7 +74,10 @@ else:
         FRONTEND_ORIGIN,
         "https://dwc-omnichat.onrender.com",
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",  # Vite fallback port
+        "http://127.0.0.1:5174",
+        "null"  # Allow file:// protocol for local testing
     ]
     logging.info(f"✅ CORS configured for origins: {', '.join(allowed_origins)}")
 
@@ -174,7 +177,8 @@ def db_init():
             assigned_staff TEXT,
             open INTEGER, updated_at TEXT,
             patience_sent INTEGER DEFAULT 0,
-            final_sent INTEGER DEFAULT 0
+            final_sent INTEGER DEFAULT 0,
+            escalation_active INTEGER DEFAULT 1
         )""")
         c.execute("""CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,7 +190,7 @@ def db_init():
         CREATE TABLE IF NOT EXISTS followups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, channel TEXT,
-            name TEXT, contact TEXT,
+            name TEXT, email TEXT, phone TEXT,
             message TEXT, ts TEXT
         )
         """)
@@ -213,6 +217,10 @@ def db_init():
             pass
         try:
             c.execute("ALTER TABLE conversations ADD COLUMN final_sent INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE conversations ADD COLUMN escalation_active INTEGER DEFAULT 1")
         except sqlite3.OperationalError:
             pass
 
@@ -283,27 +291,49 @@ class AdminSendSchema(BaseModel):
 class FollowupSchema(BaseModel):
     user_id: str
     channel: str = "webchat"
-    name: str
-    contact: str
-    message: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    message: Optional[str] = None
+class BulkCloseSchema(BaseModel):
+    conversations: list[dict]  # List of {user_id, channel} dicts
+
 
 # ========================
 # Conversation Helpers
 # ========================
-def ensure_conversation(user_id: str, channel: str):
+def ensure_conversation(user_id: str, channel: str) -> bool:
+    """
+    Ensures conversation exists and is open.
+    Returns True if this is a brand new conversation (first message ever).
+    """
     ts = datetime.datetime.utcnow().isoformat() + "Z"
+    is_new = False
+
     with db() as conn:
         c = conn.cursor()
-        c.execute("SELECT id FROM conversations WHERE user_id=? AND channel=?",
+        c.execute("SELECT id, open FROM conversations WHERE user_id=? AND channel=?",
                   (user_id, channel))
         row = c.fetchone()
         if not row:
-            c.execute("INSERT INTO conversations (user_id, channel, assigned_staff, open, updated_at) VALUES (?,?,?,?,?)",
-                      (user_id, channel, None, 1, ts))
+            # First message ever - create conversation with escalation enabled
+            c.execute("INSERT INTO conversations (user_id, channel, assigned_staff, open, updated_at, escalation_active) VALUES (?,?,?,?,?,?)",
+                      (user_id, channel, None, 1, ts, 1))
+            is_new = True
         else:
-            c.execute("UPDATE conversations SET open=1, updated_at=? WHERE user_id=? AND channel=?",
-                      (ts, user_id, channel))
+            # Conversation exists - check if it was closed
+            was_closed = row["open"] == 0
+            if was_closed:
+                # Reopening after being closed - re-enable escalation for new user message
+                c.execute("UPDATE conversations SET open=1, updated_at=?, escalation_active=1, patience_sent=0, final_sent=0 WHERE user_id=? AND channel=?",
+                          (ts, user_id, channel))
+            else:
+                # Conversation still open - just update timestamp, don't touch escalation
+                c.execute("UPDATE conversations SET updated_at=? WHERE user_id=? AND channel=?",
+                          (ts, user_id, channel))
         conn.commit()
+
+    return is_new
 
 def add_message(user_id: str, channel: str, sender: str, text: str):
     ts = datetime.datetime.utcnow().isoformat() + "Z"
@@ -463,7 +493,53 @@ def admin_convos():
         c = conn.cursor()
         c.execute("SELECT * FROM conversations WHERE open=1 ORDER BY updated_at DESC")
         rows = c.fetchall()
-    return {"conversations": [dict(r) for r in rows]}
+
+        conversations = []
+        for row in rows:
+            convo = dict(row)
+
+            # Get message count and preview for this conversation
+            c.execute("""
+                SELECT COUNT(*) as count,
+                       GROUP_CONCAT(sender || ': ' || text, ' | ') as preview
+                FROM (
+                    SELECT sender, text FROM messages
+                    WHERE user_id=? AND channel=?
+                    ORDER BY ts DESC LIMIT 3
+                )
+            """, (convo['user_id'], convo['channel']))
+            msg_data = c.fetchone()
+
+            convo['message_count'] = msg_data['count'] if msg_data else 0
+            convo['preview'] = msg_data['preview'] if msg_data and msg_data['preview'] else "No messages yet"
+            conversations.append(convo)
+
+    return {"conversations": conversations}
+
+@app.get("/admin/api/messages/{user_id}/{channel}", dependencies=[Depends(require_role(["admin", "staff"]))])
+def get_conversation_messages(user_id: str, channel: str):
+    """Fetch all messages for a specific conversation"""
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT sender, text, ts
+            FROM messages
+            WHERE user_id=? AND channel=?
+            ORDER BY ts ASC
+        """, (user_id, channel))
+        messages = [dict(row) for row in c.fetchall()]
+
+        # Also get conversation metadata
+        c.execute("""
+            SELECT * FROM conversations
+            WHERE user_id=? AND channel=?
+        """, (user_id, channel))
+        convo = c.fetchone()
+
+    return {
+        "messages": messages,
+        "conversation": dict(convo) if convo else None
+    }
 
 # ✅ Corrected: merged closed convos + migrated followups
 @app.get("/admin/api/history", dependencies=[Depends(require_role(["admin"]))])
@@ -471,35 +547,52 @@ def admin_history():
     with db() as conn:
         c = conn.cursor()
 
-        # Closed conversations from conversations table
+        # Closed conversations from conversations table (show all fields)
         c.execute("""
-            SELECT user_id, channel, updated_at, 'conversations' as source
+            SELECT user_id, channel, assigned_staff, updated_at,
+                   created_at, closed_at, 'conversation' as source,
+                   NULL as name, NULL as email, NULL as phone, NULL as message
             FROM conversations
             WHERE open=0
-            ORDER BY updated_at DESC LIMIT 50
+            ORDER BY updated_at DESC
         """)
         convos = [dict(r) for r in c.fetchall()]
 
-        # Migrated followups from history table
+        # Count messages for each conversation
+        for convo in convos:
+            c.execute("SELECT COUNT(*) FROM messages WHERE user_id=? AND channel=?",
+                     (convo["user_id"], convo["channel"]))
+            convo["message_count"] = c.fetchone()[0]
+
+        # Migrated followups from history table (show all fields)
         c.execute("""
-            SELECT user_id, channel, migrated_at as updated_at, 'history' as source
+            SELECT id, user_id, channel, name, contact, message,
+                   ts as created_at, migrated_at as updated_at, 'followup' as source,
+                   NULL as assigned_staff, NULL as closed_at, 0 as message_count
             FROM history
-            ORDER BY migrated_at DESC LIMIT 50
+            ORDER BY migrated_at DESC
         """)
         followup_histories = [dict(r) for r in c.fetchall()]
 
-    # Merge and deduplicate: prefer the 'history' version if duplicate
-    merged = {}
-    for convo in convos + followup_histories:
-        key = (convo["user_id"], convo["channel"])
-        if key not in merged or convo.get("source") == "history":
-            merged[key] = convo
+        # Parse contact field into email and phone for followups
+        for fh in followup_histories:
+            contact = fh.get("contact", "")
+            # Extract email and phone from "Email: x, Phone: y" format
+            fh["email"] = None
+            fh["phone"] = None
+            if contact:
+                parts = contact.split(", ")
+                for part in parts:
+                    if part.startswith("Email: "):
+                        fh["email"] = part.replace("Email: ", "").strip()
+                    elif part.startswith("Phone: "):
+                        fh["phone"] = part.replace("Phone: ", "").strip()
 
-    # Final sorted list by timestamp
-    combined = list(merged.values())
+    # Combine both lists (no deduplication - show all history)
+    combined = convos + followup_histories
     combined.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
 
-    return {"conversations": combined}
+    return {"history": combined}
 
 @app.get("/admin/api/history/export", dependencies=[Depends(require_role(["admin"]))])
 def export_and_purge_history():
@@ -573,6 +666,132 @@ def admin_followups():
         rows = c.fetchall()
     return {"followups": [dict(r) for r in rows]}
 
+@app.get("/admin/api/conversations", dependencies=[Depends(require_role(["admin", "staff"]))])
+def admin_conversations(status: str = "open"):
+    """Get conversations filtered by status (open, escalated, closed)"""
+    with db() as conn:
+        c = conn.cursor()
+
+        if status == "open":
+            # Get open conversations that are NOT escalated
+            c.execute("""
+                SELECT * FROM conversations
+                WHERE open=1 AND final_sent=0
+                ORDER BY updated_at DESC
+            """)
+        elif status == "escalated":
+            # Get escalated conversations (open AND final_sent=1)
+            c.execute("""
+                SELECT * FROM conversations
+                WHERE open=1 AND final_sent=1
+                ORDER BY updated_at DESC
+            """)
+        elif status == "closed":
+            # Get closed conversations
+            c.execute("""
+                SELECT * FROM conversations
+                WHERE open=0
+                ORDER BY updated_at DESC LIMIT 100
+            """)
+        else:
+            # Default: all open conversations
+            c.execute("""
+                SELECT * FROM conversations
+                WHERE open=1
+                ORDER BY updated_at DESC
+            """)
+
+        rows = c.fetchall()
+        conversations = [dict(r) for r in rows]
+
+        # Add message count for each conversation
+        for convo in conversations:
+            c.execute("""
+                SELECT COUNT(*) FROM messages
+                WHERE user_id=? AND channel=?
+            """, (convo["user_id"], convo["channel"]))
+            convo["message_count"] = c.fetchone()[0]
+
+    return {"conversations": conversations}
+
+@app.get("/admin/api/followups/unviewed-count", dependencies=[Depends(require_role(["admin"]))])
+def admin_followups_unviewed_count():
+    """Get count of unviewed followups for notification badge"""
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM followups WHERE viewed = 0")
+        count = c.fetchone()[0]
+    return {"count": count}
+
+@app.post("/admin/api/followups/{followup_id}/mark-viewed", dependencies=[Depends(require_role(["admin"]))])
+def mark_followup_viewed(followup_id: int):
+    """Mark a followup as viewed when admin opens it"""
+    with db() as conn:
+        c = conn.cursor()
+        c.execute("UPDATE followups SET viewed = 1 WHERE id = ?", (followup_id,))
+        conn.commit()
+    return {"success": True, "id": followup_id}
+
+@app.delete("/admin/api/followups/{followup_id}", dependencies=[Depends(require_role(["admin"]))])
+def delete_followup(followup_id: int):
+    """Archive a followup to history instead of deleting"""
+    with db() as conn:
+        c = conn.cursor()
+        # Get the followup data
+        c.execute("SELECT user_id, channel, name, email, phone, message, ts FROM followups WHERE id = ?", (followup_id,))
+        row = c.fetchone()
+
+        if row:
+            # Archive to history table
+            contact = f"Email: {row[3] or 'N/A'}, Phone: {row[4] or 'N/A'}"
+            c.execute(
+                "INSERT INTO history (user_id, channel, name, contact, message, ts, migrated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (row[0], row[1], row[2], contact, row[5], row[6], datetime.datetime.utcnow().isoformat() + "Z")
+            )
+
+            # Remove from followups
+            c.execute("DELETE FROM followups WHERE id = ?", (followup_id,))
+            conn.commit()
+            return {"success": True, "id": followup_id, "archived": True}
+        else:
+            raise HTTPException(status_code=404, detail="Followup not found")
+
+@app.get("/admin/api/history/export", dependencies=[Depends(require_role(["admin"]))])
+def export_history(days: int = None):
+    """Export history records. If days specified, only exports records from last N days."""
+    with db() as conn:
+        c = conn.cursor()
+        if days:
+            cutoff_date = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat() + "Z"
+            c.execute("SELECT * FROM history WHERE migrated_at >= ? ORDER BY migrated_at DESC", (cutoff_date,))
+        else:
+            c.execute("SELECT * FROM history ORDER BY migrated_at DESC")
+        rows = c.fetchall()
+    return {"history": [dict(r) for r in rows], "count": len(rows)}
+
+@app.post("/admin/api/history/export-and-delete", dependencies=[Depends(require_role(["admin"]))])
+def export_and_delete_history():
+    """Export all history and delete records older than 30 days"""
+    with db() as conn:
+        c = conn.cursor()
+
+        # Get all history for export
+        c.execute("SELECT * FROM history ORDER BY migrated_at DESC")
+        all_history = [dict(r) for r in c.fetchall()]
+
+        # Delete records older than 30 days
+        cutoff_date = (datetime.datetime.utcnow() - datetime.timedelta(days=30)).isoformat() + "Z"
+        c.execute("DELETE FROM history WHERE migrated_at < ?", (cutoff_date,))
+        deleted_count = c.rowcount
+        conn.commit()
+
+    return {
+        "success": True,
+        "history": all_history,
+        "total_exported": len(all_history),
+        "deleted_count": deleted_count
+    }
+
 @app.get("/admin/api/messages/{channel}/{user_id}", dependencies=[Depends(require_role(["admin", "staff"]))])
 def admin_messages(channel: str, user_id: str):
     return get_messages(user_id, channel)
@@ -581,9 +800,9 @@ def admin_messages(channel: str, user_id: str):
 @app.post("/admin/api/send")
 async def admin_send(msg: AdminSendSchema, user: TokenData = Depends(require_role(["admin", "staff"]))):
     add_message(msg.user_id, msg.channel, "staff", msg.text)
-    # Reset escalation flag once staff replies
+    # Terminate escalation completely when staff replies
     with db() as conn:
-        conn.execute("UPDATE conversations SET final_sent=0 WHERE user_id=? AND channel=?",
+        conn.execute("UPDATE conversations SET escalation_active=0, final_sent=0, patience_sent=0 WHERE user_id=? AND channel=?",
                      (msg.user_id, msg.channel))
         conn.commit()
 
@@ -624,8 +843,8 @@ async def followup_submit(data: FollowupSchema):
     # write to followups
     with db() as conn:
         conn.execute(
-            "INSERT INTO followups (user_id, channel, name, contact, message, ts) VALUES (?,?,?,?,?,?)",
-            (data.user_id, data.channel, data.name, data.contact, data.message, ts),
+            "INSERT INTO followups (user_id, channel, name, email, phone, message, ts) VALUES (?,?,?,?,?,?,?)",
+            (data.user_id, data.channel, data.name, data.email, data.phone, data.message, ts),
         )
         # close the conversation so escalation loop won't re-fire
         conn.execute("UPDATE conversations SET open=0, updated_at=? WHERE user_id=? AND channel=?",
@@ -650,9 +869,43 @@ async def followup_submit(data: FollowupSchema):
     return {"status": "ok"}
 
 @app.post("/handoff/close")
-def handoff_close(data: StartHandoffSchema):
+def handoff_close(data: StartHandoffSchema, user: TokenData = Depends(require_role(["admin", "staff"]))):
     set_assignment(data.user_id, data.channel, None, False)
     return {"status": "closed"}
+
+@app.post("/handoff/close-bulk")
+def handoff_close_bulk(data: BulkCloseSchema, user: TokenData = Depends(require_role(["admin", "staff"]))):
+    """Close multiple conversations at once"""
+    logging.info(f"[BULK CLOSE] Received request to close {len(data.conversations)} conversations")
+    closed_count = 0
+    errors = []
+    
+    for convo in data.conversations:
+        try:
+            user_id = convo.get("user_id")
+            channel = convo.get("channel", "webchat")
+            
+            logging.info(f"[BULK CLOSE] Processing: user_id={user_id}, channel={channel}")
+            
+            if user_id:
+                set_assignment(user_id, channel, None, False)
+                closed_count += 1
+                logging.info(f"[BULK CLOSE] Successfully closed: {user_id} on {channel}")
+            else:
+                logging.warning(f"[BULK CLOSE] Skipping conversation with no user_id: {convo}")
+        except Exception as e:
+            error_msg = f"Failed to close {convo.get('user_id')}: {str(e)}"
+            logging.error(f"[BULK CLOSE] {error_msg}")
+            errors.append(error_msg)
+    
+    result = {
+        "status": "ok",
+        "closed": closed_count,
+        "total": len(data.conversations),
+        "errors": errors if errors else None
+    }
+    logging.info(f"[BULK CLOSE] Result: {result}")
+    return result
 
 # Webchat
 @app.get("/webchat")
@@ -663,7 +916,7 @@ def webchat_check():
 async def webchat_post(msg: PostMessageSchema):
     channel = msg.channel or "webchat"
 
-    ensure_conversation(msg.user_id, channel)
+    is_new_conversation = ensure_conversation(msg.user_id, channel)
     add_message(msg.user_id, channel, "user", msg.text)
 
     # Broadcast the actual user message to admin dashboards
@@ -672,14 +925,21 @@ async def webchat_post(msg: PostMessageSchema):
         "text": msg.text,
         "ts": datetime.datetime.utcnow().isoformat() + "Z"
     })
+    # Send push notifications to admin mobile apps
+    await notify_admins_new_message(msg.user_id, channel, msg.text)
 
-    # Immediate auto-reply for the visitor only
-    auto_msg = "Connecting you with a staff member, please wait..."
-    await ws_manager.push(msg.user_id, channel, {
-        "sender": "system",
-        "text": auto_msg,
-        "ts": datetime.datetime.utcnow().isoformat() + "Z"
-    })
+
+    # Send push notifications to admin mobile apps
+    await notify_admins_new_message(msg.user_id, channel, msg.text)
+
+    # Send greeting ONLY on first message ever
+    if is_new_conversation:
+        auto_msg = "Connecting you with a staff member, please wait..."
+        await ws_manager.push(msg.user_id, channel, {
+            "sender": "system",
+            "text": auto_msg,
+            "ts": datetime.datetime.utcnow().isoformat() + "Z"
+        })
 
     return {"status": "ok"}
 
@@ -794,9 +1054,12 @@ async def ws_admin(websocket: WebSocket, user: TokenData = Depends(get_websocket
                 user_id = data.get("user_id")
                 channel = data.get("channel", "webchat")
 
-                if ev_type in ("typing", "stop_typing") and user_id:
+                # Handle typing indicators from admin dashboard or mobile app
+                if ev_type in ("typing", "stop_typing", "staff_typing", "staff_stop_typing") and user_id:
+                    # Normalize type to typing/stop_typing for visitor
+                    normalized_type = "typing" if "typing" in ev_type and "stop" not in ev_type else "stop_typing"
                     await ws_manager.push(user_id, channel, {
-                        "type": ev_type,
+                        "type": normalized_type,
                         "sender": "staff",
                         "ts": datetime.datetime.utcnow().isoformat() + "Z"
                     })
@@ -874,7 +1137,7 @@ async def escalation_loop():
             now = datetime.datetime.utcnow()
             with db() as conn:
                 c = conn.cursor()
-                c.execute("SELECT user_id, channel, assigned_staff, updated_at, patience_sent, final_sent FROM conversations WHERE open=1")
+                c.execute("SELECT user_id, channel, assigned_staff, updated_at, patience_sent, final_sent, escalation_active FROM conversations WHERE open=1")
                 rows = c.fetchall()
 
             for row in rows:
@@ -882,6 +1145,11 @@ async def escalation_loop():
                 updated_at = row["updated_at"]
                 patience_sent = row["patience_sent"] or 0
                 final_sent = row["final_sent"] or 0
+                escalation_active = row.get("escalation_active", 1)  # Default to 1 for backward compatibility
+
+                # Skip escalation if it's been terminated by staff reply
+                if not escalation_active:
+                    continue
 
                 if not assigned and updated_at:
                     try:
@@ -959,3 +1227,96 @@ async def escalation_loop():
         except Exception as e:
             logging.exception("Error in escalation_loop", exc_info=e)
         await asyncio.sleep(30)
+# ============================================================================
+# PUSH NOTIFICATION ENDPOINTS
+# ============================================================================
+
+# Store for admin push tokens (in production, use database)
+admin_push_tokens = {}
+
+@app.post("/admin/api/push-token", dependencies=[Depends(require_role(["admin", "staff"]))])
+def register_push_token(request: Request):
+    """Register admin's Expo push notification token"""
+    import json
+    data = json.loads(request._body.decode() if hasattr(request, '_body') else '{}')
+    
+    push_token = data.get('push_token')
+    if not push_token:
+        raise HTTPException(status_code=400, detail="push_token is required")
+    
+    # Get user info from JWT token
+    user = request.state.user
+    user_id = user.get('id') or user.get('email')
+    
+    # Store the push token
+    admin_push_tokens[user_id] = push_token
+    
+    print(f"✅ Registered push token for {user_id}: {push_token[:50]}...")
+    
+    return {"success": True, "message": "Push token registered"}
+
+
+async def send_push_notification(expo_token: str, title: str, body: str, data: dict = None):
+    """
+    Send push notification via Expo Push Notification service
+    
+    Args:
+        expo_token: Expo push token (ExponentPushToken[...])
+        title: Notification title
+        body: Notification body
+        data: Optional data payload
+    """
+    import httpx
+    
+    message = {
+        "to": expo_token,
+        "sound": "default",
+        "title": title,
+        "body": body,
+        "data": data or {},
+        "priority": "high",
+        "channelId": "dwc-admin-messages"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json=message,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"✅ Push notification sent: {result}")
+                return result
+            else:
+                print(f"❌ Failed to send push notification: {response.text}")
+                return None
+    except Exception as e:
+        print(f"❌ Error sending push notification: {e}")
+        return None
+
+
+async def notify_admins_new_message(user_id: str, channel: str, message_text: str):
+    """Send push notifications to all registered admin devices"""
+    if not admin_push_tokens:
+        print("No admin push tokens registered")
+        return
+    
+    title = f"New message from {user_id}"
+    body = message_text[:100]  # Truncate long messages
+    data = {
+        "type": "new_message",
+        "user_id": user_id,
+        "channel": channel
+    }
+    
+    # Send to all registered admin tokens
+    for admin_id, token in admin_push_tokens.items():
+        print(f"📤 Sending push notification to {admin_id}")
+        await send_push_notification(token, title, body, data)
+

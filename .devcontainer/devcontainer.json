@@ -1,0 +1,8 @@
+{
+  "name": "claude-dev",
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "node",
+  "forwardPorts": [8000, 5173, 8081]
+}

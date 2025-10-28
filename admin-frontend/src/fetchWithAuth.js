@@ -27,8 +27,21 @@ export default async function fetchWithAuth(url, options = {}) {
   }
 
   if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(`Fetch failed: ${response.status} ${JSON.stringify(errorData)}`);
+    let errorMessage;
+    const contentType = response.headers.get("content-type");
+
+    if (contentType && contentType.includes("application/json")) {
+      try {
+        const errorData = await response.json();
+        errorMessage = JSON.stringify(errorData);
+      } catch (e) {
+        errorMessage = response.statusText;
+      }
+    } else {
+      const errorText = await response.text();
+      errorMessage = errorText || response.statusText;
+    }
+    throw new Error(`Fetch failed: ${response.status} ${errorMessage}`);
   }
 
   return response.json();

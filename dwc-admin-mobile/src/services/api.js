@@ -1,0 +1,188 @@
+/**
+ * API Service for DWC Admin Mobile App
+ * Handles authentication and HTTP requests to the backend
+ */
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Configure this to your backend URL
+// For local development: Use localtunnel URL (currently unstable)
+// For production: Use your production server URL
+export const API_URL = 'https://1a7531c71be4.ngrok-free.app';  // LOCAL BACKEND via ngrok (auto-updated)
+export const WS_URL = 'wss://1a7531c71be4.ngrok-free.app';      // LOCAL BACKEND via ngrok (auto-updated)
+
+/**
+ * Login with email and password
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<object>} Token data
+ */
+export const login = async (email, password) => {
+  try {
+    const formData = new URLSearchParams();
+    formData.append('username', email);
+    formData.append('password', password);
+
+    const response = await fetch(`${API_URL}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Login failed');
+    }
+
+    const data = await response.json();
+
+    // Store token in AsyncStorage
+    await AsyncStorage.setItem('access_token', data.access_token);
+    await AsyncStorage.setItem('token_type', data.token_type);
+
+    return data;
+  } catch (error) {
+    console.error('Login error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get stored access token
+ * @returns {Promise<string|null>}
+ */
+export const getToken = async () => {
+  try {
+    return await AsyncStorage.getItem('access_token');
+  } catch (error) {
+    console.error('Error getting token:', error);
+    return null;
+  }
+};
+
+/**
+ * Logout and clear stored credentials
+ */
+export const logout = async () => {
+  try {
+    await AsyncStorage.removeItem('access_token');
+    await AsyncStorage.removeItem('token_type');
+    await AsyncStorage.removeItem('push_token');
+  } catch (error) {
+    console.error('Error logging out:', error);
+  }
+};
+
+/**
+ * Make authenticated API request
+ * @param {string} endpoint
+ * @param {object} options
+ * @returns {Promise<object>}
+ */
+export const fetchWithAuth = async (endpoint, options = {}) => {
+  const token = await getToken();
+
+  if (!token) {
+    throw new Error('No authentication token found');
+  }
+
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    // Token expired or invalid
+    await logout();
+    throw new Error('Session expired. Please login again.');
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(error.detail || 'Request failed');
+  }
+
+  return response.json();
+};
+
+/**
+ * Fetch open conversations
+ * @returns {Promise<Array>}
+ */
+export const fetchOpenConversations = async () => {
+  return fetchWithAuth('/admin/api/conversations?status=open');
+};
+
+/**
+ * Fetch escalated conversations
+ * @returns {Promise<Array>}
+ */
+export const fetchEscalatedConversations = async () => {
+  return fetchWithAuth('/admin/api/conversations?status=escalated');
+};
+
+/**
+ * Fetch followups
+ * @returns {Promise<Array>}
+ */
+export const fetchFollowups = async () => {
+  return fetchWithAuth('/admin/api/followups');
+};
+
+/**
+ * Fetch conversation history (closed conversations)
+ * @returns {Promise<object>}
+ */
+export const fetchHistory = async () => {
+  return fetchWithAuth('/admin/api/history');
+};
+
+/**
+ * Fetch chat history for a conversation
+ * @param {string} userId
+ * @param {string} channel
+ * @returns {Promise<Array>}
+ */
+export const fetchMessages = async (userId, channel) => {
+  return fetchWithAuth(`/admin/api/messages/${userId}/${channel}`);
+};
+
+/**
+ * Send a message to a conversation
+ * @param {string} userId
+ * @param {string} channel
+ * @param {string} text
+ * @returns {Promise<object>}
+ */
+export const sendMessage = async (userId, channel, text) => {
+  return fetchWithAuth('/admin/api/send', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: userId,
+      channel: channel,
+      text: text,
+    }),
+  });
+};
+
+/**
+ * Register push notification token with backend
+ * @param {string} expoPushToken
+ * @returns {Promise<object>}
+ */
+export const registerPushToken = async (expoPushToken) => {
+  return fetchWithAuth('/admin/api/push-token', {
+    method: 'POST',
+    body: JSON.stringify({
+      push_token: expoPushToken,
+    }),
+  });
+};

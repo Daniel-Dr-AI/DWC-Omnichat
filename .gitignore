@@ -1,4 +1,4 @@
-﻿# venv & caches
+# venv & caches
 .venv/
 __pycache__/
 *.pyc
@@ -10,3 +10,9 @@ handoff.sqlite
 
 # node or misc
 node_modules/
+
+# AI coding assistants
+# Keep .context7 in git (project context)
+# Keep .serena/ config but ignore cache
+.serena/cache/
+.serena/memories/*.tmp

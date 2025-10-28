@@ -1,0 +1,70 @@
+# Context 7 Configuration for DWC-Omnichat
+# This file helps Context 7 understand your project structure and provide better assistance
+
+## Project Overview
+DWC-Omnichat is a multi-tenant omnichannel chat platform with FastAPI backend and React frontend.
+
+## Architecture
+- **Backend**: Python/FastAPI monolithic app (server.py ~1271 lines)
+- **Frontend**: React + Vite admin dashboard (admin-frontend/)
+- **Database**: SQLite (handoff.sqlite)
+- **Real-time**: WebSocket connections for visitor and admin chat
+- **Auth**: JWT-based authentication with RBAC (roles: admin, staff)
+
+## Key Files
+- `server.py` - Main FastAPI application with all endpoints and WebSocket handlers
+- `auth.py` - Authentication module with JWT and role-based access control
+- `analytics.py` - Conversation metrics and KPI tracking
+- `admin-frontend/` - React SPA with admin dashboard
+- `test-chat-widget.html` - Visitor-facing chat widget
+
+## Database
+Path logic: `/data/handoff.sqlite` (Render) or `./handoff.sqlite` (local)
+Tables: tenants, users, conversations, messages, followups, history, events, conversation_metrics
+
+## Development Commands
+```bash
+# Backend (from project root)
+.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+
+# Frontend (from project root)
+cd admin-frontend && npm run dev
+
+# Build frontend for production
+cd admin-frontend && npm run build
+```
+
+## API Structure
+- `/api/v1/auth/*` - Authentication endpoints
+- `/admin/api/*` - Admin dashboard API (legacy, not versioned)
+- `/ws/{user_id}` - Visitor WebSocket
+- `/admin-ws?token={jwt}` - Admin WebSocket (authenticated)
+- `/webchat` - Visitor message endpoint
+- `/health` - Health check
+
+## Deployment
+Platform: Render.com
+Build: Installs Node.js, builds frontend, then starts uvicorn
+Config: render.yaml
+
+## Important Patterns
+- WebSocket connection pooling via WSManager class
+- JWT tokens expire after 72 hours
+- Admin dashboard mounted at /admin-app (not root)
+- Vite config uses base: '/admin-app/' for asset paths
+- CORS configured for multiple origins (prod + local dev)
+
+## Multi-tenant
+- Tenant ID 1 is default tenant
+- Users belong to tenants with role-based permissions
+- Conversations and messages are tenant-scoped
+
+## Integrations
+- Twilio: SMS/WhatsApp webhook at /sms
+- Facebook: Messenger integration (optional)
+- Future: Mobile app with push notifications
+
+## Refactoring Status
+Current: Monolithic server.py
+Planned: Modular FastAPI structure (see REFACTORING_PLAN.md)
+Priority: Maintain stability while adding features

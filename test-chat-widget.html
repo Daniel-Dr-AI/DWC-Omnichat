@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WordPress Chat Widget Test - DWC Omnichat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .demo-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .info-box {
+            background: #f0f9ff;
+            border: 2px solid #0ea5e9;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .info-box h3 {
+            color: #0c4a6e;
+            margin-bottom: 10px;
+        }
+
+        .info-box ul {
+            margin-left: 20px;
+            color: #0c4a6e;
+        }
+
+        .info-box li {
+            margin: 5px 0;
+        }
+
+        .status {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8fafc;
+            border-radius: 8px;
+        }
+
+        .status-item {
+            flex: 1;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .status-item.connected {
+            background: #dcfce7;
+            border: 2px solid #16a34a;
+        }
+
+        .status-item.disconnected {
+            background: #fee2e2;
+            border: 2px solid #dc2626;
+        }
+
+        .status-item strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #chatWidget {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 380px;
+            height: 600px;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        #chatWidget.minimized {
+            height: 70px;
+            cursor: pointer;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-header h3 {
+            margin: 0;
+            font-size: 1.2em;
+        }
+
+        .minimize-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1.2em;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .minimize-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        #chatContent {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 20px;
+            background: #f8fafc;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            max-width: 100%;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-bubble {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
+
+        .message.user .message-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.staff .message-bubble,
+        .message.system .message-bubble {
+            background: white;
+            color: #333;
+            border: 1px solid #e2e8f0;
+        }
+
+        .message.system .message-bubble {
+            background: #fef3c7;
+            border-color: #fbbf24;
+            font-style: italic;
+            color: #92400e;
+        }
+
+        .message-sender {
+            font-size: 0.75em;
+            color: #666;
+            margin-bottom: 4px;
+            padding-left: 16px;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 12px 16px;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 18px;
+            max-width: 75%;
+        }
+
+        .typing-indicator.show {
+            display: inline-block;
+        }
+
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            background: #94a3b8;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+            }
+            30% {
+                transform: translateY(-10px);
+            }
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 10px;
+        }
+
+        #messageInput {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 24px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #messageInput:focus {
+            border-color: #667eea;
+        }
+
+        #sendButton {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 24px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        #sendButton:hover {
+            transform: scale(1.05);
+        }
+
+        #sendButton:active {
+            transform: scale(0.95);
+        }
+
+        #sendButton:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .connection-status {
+            font-size: 0.85em;
+            padding: 8px 12px;
+            background: #f1f5f9;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .connection-status.connected {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .connection-status.disconnected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        @media (max-width: 768px) {
+            #chatWidget {
+                width: 100%;
+                height: 100vh;
+                bottom: 0;
+                right: 0;
+                border-radius: 0;
+            }
+
+            .demo-container {
+                padding: 20px;
+            }
+        }
+
+        /* Contact Form Styles */
+        #contactFormContainer {
+            display: none;
+            padding: 20px;
+            background: #f8fafc;
+            border-top: 2px solid #e2e8f0;
+        }
+
+        #contactFormContainer.show {
+            display: block;
+        }
+
+        .form-header {
+            margin-bottom: 15px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #475569;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .submit-followup-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 15px;
+            transition: transform 0.2s;
+        }
+
+        .submit-followup-btn:hover {
+            transform: scale(1.02);
+        }
+
+        .submit-followup-btn:active {
+            transform: scale(0.98);
+        }
+
+        .submit-followup-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h1>🚀 WordPress Chat Widget Test</h1>
+        <p class="subtitle">Testing DWC Omnichat WebSocket Connection</p>
+
+        <div class="info-box">
+            <h3>📋 Test Information</h3>
+            <ul>
+                <li><strong>Backend API:</strong> http://localhost:8000</li>
+                <li><strong>WebSocket:</strong> ws://localhost:8000/ws/{user_id}</li>
+                <li><strong>User ID:</strong> <code id="visitorId"></code></li>
+                <li><strong>Admin Dashboard:</strong> <a href="http://localhost:5173/admin-app/login" target="_blank">http://localhost:5173/admin-app/login</a></li>
+            </ul>
+        </div>
+
+        <div class="status">
+            <div class="status-item" id="wsStatus">
+                <strong>WebSocket Status</strong>
+                <span id="wsStatusText">Connecting...</span>
+            </div>
+            <div class="status-item" id="apiStatus">
+                <strong>API Status</strong>
+                <span id="apiStatusText">Checking...</span>
+            </div>
+        </div>
+
+        <p style="color: #666; margin-bottom: 20px;">
+            👉 The chat widget is in the bottom-right corner. Type messages and they'll appear in the admin dashboard in real-time.
+            <br><br>
+            🔑 <strong>Admin Login:</strong> admin@dwc.com / admin123
+        </p>
+    </div>
+
+    <!-- Chat Widget -->
+    <div id="chatWidget">
+        <div class="chat-header" onclick="toggleChat()">
+            <h3>💬 Chat with Us</h3>
+            <button class="minimize-btn" onclick="toggleChat(); event.stopPropagation();">−</button>
+        </div>
+        <div id="chatContent">
+            <div class="connection-status" id="connectionStatus">Connecting...</div>
+            <div id="messages"></div>
+            <!-- Contact Form (shown when no staff response) -->
+            <div id="contactFormContainer">
+                <div class="form-header">📧 Leave your contact information</div>
+                <form id="contactForm" onsubmit="submitContactForm(event)">
+                    <div class="form-group">
+                        <label for="contactName">Name (optional)</label>
+                        <input type="text" id="contactName" placeholder="Your name">
+                    </div>
+                    <div class="form-group">
+                        <label for="contactEmail">Email (optional)</label>
+                        <input type="email" id="contactEmail" placeholder="your@email.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="contactPhone">Phone (optional)</label>
+                        <input type="tel" id="contactPhone" placeholder="(555) 123-4567">
+                    </div>
+                    <div class="form-group">
+                        <label for="contactMessage">Message (optional)</label>
+                        <textarea id="contactMessage" placeholder="How can we help you?"></textarea>
+                    </div>
+                    <button type="submit" class="submit-followup-btn" id="submitFollowupBtn">Send Message</button>
+                </form>
+            </div>
+            <div class="chat-input-container">
+                <div class="chat-input-wrapper">
+                    <input
+                        type="text"
+                        id="messageInput"
+                        placeholder="Type your message..."
+                        onkeypress="if(event.key==='Enter') sendMessage()"
+                    >
+                    <button id="sendButton" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate unique visitor ID
+        const visitorId = 'visitor-' + Math.random().toString(36).substr(2, 9);
+        document.getElementById('visitorId').textContent = visitorId;
+
+        const API_URL = 'http://localhost:8000';
+        const WS_URL = 'ws://localhost:8000/ws/' + visitorId;
+
+        let ws = null;
+        let isTyping = false;
+        let typingTimeout = null;
+
+        // Check API status
+        fetch(API_URL + '/health')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('apiStatus').className = 'status-item connected';
+                document.getElementById('apiStatusText').textContent = 'Connected ✓';
+                console.log('✅ API connected:', data);
+            })
+            .catch(err => {
+                document.getElementById('apiStatus').className = 'status-item disconnected';
+                document.getElementById('apiStatusText').textContent = 'Disconnected ✗';
+                console.error('❌ API error:', err);
+            });
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            console.log('🔌 Connecting to WebSocket:', WS_URL);
+
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('✅ WebSocket connected');
+                document.getElementById('wsStatus').className = 'status-item connected';
+                document.getElementById('wsStatusText').textContent = 'Connected ✓';
+                document.getElementById('connectionStatus').className = 'connection-status connected';
+                document.getElementById('connectionStatus').textContent = '🟢 Connected';
+                document.getElementById('sendButton').disabled = false;
+            };
+
+            ws.onmessage = (event) => {
+                console.log('📨 Received:', event.data);
+                const data = JSON.parse(event.data);
+
+                // Handle typing indicator
+                if (data.type === 'typing') {
+                    showTypingIndicator(data.sender);
+                } else if (data.type === 'stop_typing') {
+                    hideTypingIndicator();
+                } else {
+                    // Handle regular message
+                    hideTypingIndicator();
+                    
+                    // Check if this is a staff response
+                    if (data.sender === 'staff' || data.sender === 'admin') {
+                        hasStaffResponse = true;
+                        if (escalationTimeout) {
+                            clearTimeout(escalationTimeout);
+                        }
+                        hideContactForm();
+                    }
+                    
+                    addMessage(data.sender || 'staff', data.text, data.ts);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('🔴 WebSocket disconnected');
+                document.getElementById('wsStatus').className = 'status-item disconnected';
+                document.getElementById('wsStatusText').textContent = 'Disconnected ✗';
+                document.getElementById('connectionStatus').className = 'connection-status disconnected';
+                document.getElementById('connectionStatus').textContent = '🔴 Disconnected';
+                document.getElementById('sendButton').disabled = true;
+
+                // Attempt to reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('❌ WebSocket error:', error);
+            };
+        }
+
+        // Send message via HTTP POST
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+
+            if (!text) return;
+
+            console.log('📤 Sending message:', text);
+
+            // Show message immediately
+            addMessage('user', text, new Date().toISOString());
+            input.value = '';
+
+            // Send typing stop
+            sendTypingIndicator('stop_typing');
+
+            // Start escalation timeout only if staff hasn't responded yet
+            if (!hasStaffResponse) {
+                startEscalationTimeout();
+            }
+            
+            try {
+                const response = await fetch(API_URL + '/webchat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_id: visitorId,
+                        channel: 'webchat',
+                        text: text
+                    })
+                });
+
+                const data = await response.json();
+                console.log('✅ Message sent:', data);
+            } catch (error) {
+                console.error('❌ Error sending message:', error);
+                addMessage('system', 'Failed to send message. Please try again.', new Date().toISOString());
+            }
+        }
+
+        // Send typing indicator via WebSocket
+        function sendTypingIndicator(type) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: type, // 'typing' or 'stop_typing'
+                    user_id: visitorId,
+                    channel: 'webchat'
+                }));
+            }
+        }
+
+        // Handle typing events
+        document.getElementById('messageInput').addEventListener('input', function() {
+            if (!isTyping) {
+                isTyping = true;
+                sendTypingIndicator('typing');
+            }
+
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                isTyping = false;
+                sendTypingIndicator('stop_typing');
+            }, 1000);
+        });
+
+        // Show typing indicator
+        function showTypingIndicator(sender) {
+            let indicator = document.getElementById('typingIndicator');
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.id = 'typingIndicator';
+                indicator.className = 'message';
+                indicator.innerHTML = `
+                    <div class="typing-indicator show">
+                        <span></span><span></span><span></span>
+                    </div>
+                `;
+                document.getElementById('messages').appendChild(indicator);
+                scrollToBottom();
+            }
+        }
+
+        // Hide typing indicator
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
+        // Add message to chat
+        function addMessage(sender, text, timestamp) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + sender;
+
+            const time = new Date(timestamp).toLocaleTimeString();
+
+            messageDiv.innerHTML = `
+                <div>
+                    <div class="message-sender">${sender === 'user' ? 'You' : sender} • ${time}</div>
+                    <div class="message-bubble">${escapeHtml(text)}</div>
+                </div>
+            `;
+
+            messagesDiv.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function scrollToBottom() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Toggle chat minimize
+        function toggleChat() {
+            const widget = document.getElementById('chatWidget');
+            const content = document.getElementById('chatContent');
+            widget.classList.toggle('minimized');
+            content.style.display = widget.classList.contains('minimized') ? 'none' : 'flex';
+        }
+
+        // Initialize
+        connectWebSocket();
+
+        console.log('🎉 Chat widget initialized!');
+        console.log('📱 Visitor ID:', visitorId);
+        console.log('🔗 WebSocket URL:', WS_URL);
+        console.log('🌐 API URL:', API_URL);
+        // Contact form functionality
+        let escalationTimeout = null;
+        let hasStaffResponse = false;
+        const ESCALATION_WAIT_TIME = 30000; // 30 seconds - adjust as needed
+
+        // Start escalation timeout when user sends first message
+        function startEscalationTimeout() {
+            if (escalationTimeout) {
+                clearTimeout(escalationTimeout);
+            }
+            
+            escalationTimeout = setTimeout(() => {
+                if (!hasStaffResponse) {
+                    showContactForm();
+                }
+            }, ESCALATION_WAIT_TIME);
+        }
+
+        // Show contact form
+        function showContactForm() {
+            const formContainer = document.getElementById('contactFormContainer');
+            const inputContainer = document.querySelector('.chat-input-container');
+            
+            formContainer.classList.add('show');
+            inputContainer.style.display = 'none';
+            
+            addMessage('system', 'Our staff is currently unavailable. Please leave your contact information and we\'ll get back to you soon.', new Date().toISOString());
+        }
+
+        // Hide contact form
+        function hideContactForm() {
+            const formContainer = document.getElementById('contactFormContainer');
+            const inputContainer = document.querySelector('.chat-input-container');
+            
+            formContainer.classList.remove('show');
+            inputContainer.style.display = 'block';
+        }
+
+        // Submit contact form
+        async function submitContactForm(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('contactName').value.trim();
+            const email = document.getElementById('contactEmail').value.trim();
+            const phone = document.getElementById('contactPhone').value.trim();
+            const message = document.getElementById('contactMessage').value.trim();
+            
+            // At least one field should be filled
+            if (!name && !email && !phone && !message) {
+                alert('Please fill in at least one field');
+                return;
+            }
+            
+            const submitBtn = document.getElementById('submitFollowupBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Sending...';
+            
+            try {
+                const response = await fetch(API_URL + '/followup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_id: visitorId,
+                        channel: 'webchat',
+                        name: name || null,
+                        email: email || null,
+                        phone: phone || null,
+                        message: message || null
+                    })
+                });
+                
+                if (response.ok) {
+                    console.log('✅ Followup submitted');
+                    // Form will be hidden and thank you message will come via WebSocket
+                    document.getElementById('contactForm').reset();
+                    hideContactForm();
+                } else {
+                    throw new Error('Failed to submit');
+                }
+            } catch (error) {
+                console.error('❌ Error submitting followup:', error);
+                alert('Failed to send. Please try again.');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Send Message';
+            }
+        }
+
+    </script>
+</body>
+</html>
